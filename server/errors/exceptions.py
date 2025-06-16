@@ -32,3 +32,13 @@ class UnsupportedModel(CustomException):
         extra_info: Optional[dict] = None,
     ):
         super().__init__(message, extra_info)
+
+class MissingDeploymentName(CustomException):
+    """Exception raised when the deployment name is missing."""
+
+    def __init__(
+        self,
+        message: str,
+        extra_info: Optional[dict] = None,
+    ):
+        super().__init__(message, extra_info)
