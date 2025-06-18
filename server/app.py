@@ -6,8 +6,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 
 from server.schemas import HealthResponse
+
+# Load environment variables from .env file
+load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
