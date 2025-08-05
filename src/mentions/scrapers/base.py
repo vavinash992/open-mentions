@@ -5,8 +5,8 @@ from typing import Any, ClassVar, Optional
 import requests
 from loguru import logger
 from pydantic import BaseModel, Field
-from mentions.errors import InValidFilterException
 
+from mentions.errors import InValidFilterException
 from mentions.utils.utils import run_in_parallel
 
 
@@ -50,24 +50,36 @@ class BaseScraper(ABC):
         Initialize the scraper. This method can be overridden by subclasses
         to set up specific configurations or authentication.
         """
-        if not use_free_proxies and USER_PROXIES is None:
+        # Initialize proxies to empty list by default
+        self.proxies: list[str] = []
+
+        # If user provided proxies, use them directly
+        if USER_PROXIES:
+            self.proxies = USER_PROXIES
+            return
+
+        # If not using free proxies and no user proxies provided
+        if not use_free_proxies:
             logger.warning("No proxies are being used. This may lead to rate limiting or IP bans.")
-            self.proxies = []
+            return
+
+        # Try to get and validate free proxies
         if use_free_proxies:
             available_proxies = self.get_proxies()
             if not available_proxies:
                 msg = "No free proxies available. Using system IP instead."
                 logger.warning(msg)
-            proxies = self.validate_proxies(available_proxies) if available_proxies else []
+                return
+
+            proxies = self.validate_proxies(available_proxies)
             if len(proxies) < self.REQUIRED_PROXY_COUNT:
                 logger.warning(
                     f"Only {len(proxies)} valid proxies found. "
                     f"Required: {self.REQUIRED_PROXY_COUNT}. "
                     "Using system IP instead."
                 )
-                self.proxies = []
-        if USER_PROXIES:
-            self.proxies = USER_PROXIES
+            else:
+                self.proxies = proxies
 
     def validate_filter(self, filter_by: str) -> None:
         """
@@ -82,7 +94,7 @@ class BaseScraper(ABC):
         if filter_by not in self.FILTER_MAP:
             raise InValidFilterException(filter_by, list(self.FILTER_MAP.keys()))
 
-    def call_url(self, url: str, headers: dict[str, Any], params: dict[str, Any]) -> dict[Any, Any]:
+    def call_url(self, url: str, headers: dict[str, Any], params: dict[str, Any]) -> dict[Any, Any] | None:
         """
         Make a GET request to the specified URL with the given headers and proxy.
 
@@ -93,7 +105,7 @@ class BaseScraper(ABC):
             proxy (dict | None): Proxy settings for the request, if any.
 
         Returns:
-            Response: The response object from the GET request.
+            dict | None: The JSON response from the GET request, or None if error occurred.
         """
         try:
             proxy = {"http": random.choice(self.proxies)} if self.proxies else None  # noqa: S311
