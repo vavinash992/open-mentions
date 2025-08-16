@@ -1,5 +1,6 @@
 import random
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterator
 from typing import Any, ClassVar, Optional
 
 import requests
@@ -161,6 +162,50 @@ class BaseScraper(ABC):
                     break
         logger.info(f"Found {len(valid_proxies)} valid proxies.")
         return valid_proxies
+
+    def paginate_numbered(
+        self,
+        fetch_page: Callable[[int], tuple[list[dict], bool]],  # returns (items, has_more)
+        max_pages: int,
+    ) -> Iterator[list[dict]]:
+        """
+        Generic paginator for 'page=1..N' style APIs.
+        `fetch_page(page)` must return (items, has_more).
+        Yields the list of items for each page.
+        """
+        page = 1
+        while page <= max_pages:
+            items, has_more = fetch_page(page)
+            if not items:
+                break
+            yield items
+            if not has_more:
+                break
+            page += 1
+
+    def paginate_cursor(
+        self,
+        fetch_cursor: Callable[
+            [str | None], tuple[list[dict], str | None, bool]
+        ],  # returns (items, next_cursor, has_more)
+        max_pages: int,
+        start_cursor: str | None = None,
+    ) -> Iterator[list[dict]]:
+        """
+        Generic paginator for 'cursor/after' style APIs.
+        `fetch_cursor(token)` must return (items, next_token, has_more).
+        Yields the list of items for each cursor step.
+        """
+        token = start_cursor
+        steps = 0
+        while steps < max_pages:
+            items, token, has_more = fetch_cursor(token)
+            if not items:
+                break
+            yield items
+            if not has_more:
+                break
+            steps += 1
 
     @abstractmethod
     def search(self, keyword: str, filter_by: str) -> list[ScrapedItem]:
