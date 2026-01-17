@@ -30,6 +30,30 @@ class ScrapedItem(BaseModel):
     user_profile_url: Optional[str] = Field(None, description="URL to the user's profile on the platform.")
     timestamp: Optional[str] = Field(None, description="Timestamp when the item was created or posted.")
     comments: Optional[int] = Field(None, description="Number of comments associated with the item.")
+    # LLM Classification fields
+    is_relevant: bool | None = Field(
+        None,
+        description="Whether this mention is actually about the target company (LLM classified).",
+    )
+    confidence_score: float | None = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score for the classification (0.0 to 1.0).",
+    )
+    reasoning: str | None = Field(
+        None,
+        description="Short explanation of the classification provided by LLM.",
+    )
+    emotion: str | None = Field(
+        None,
+        description="Primary emotion detected in the text (e.g., 'frustration', 'joy', 'curiosity', 'disappointment', 'anger', 'neutral').",
+    )
+    summary: str | None = Field(
+        None,
+        max_length=150,
+        description="Concise one-sentence summary of what the mention is about (max 150 characters).",
+    )
 
 
 class BaseScraper(ABC):

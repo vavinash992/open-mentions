@@ -20,7 +20,9 @@ classifiers = [
 dependencies = [
     "fastapi>=0.116.1",
     "loguru>=0.7.3",
+    "openai>=1.0.0",
     "pydantic>=2.11.7",
+    "python-dotenv>=1.0.0",
     "requests>=2.32.4",
     "tqdm>=4.67.1",
 ]

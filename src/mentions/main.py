@@ -1,5 +1,11 @@
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+
+from mentions.routers import search
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = FastAPI(
     title="Open Mentions API",
@@ -14,6 +20,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register routers
+app.include_router(search.search_router)
 
 
 @app.get("/")
