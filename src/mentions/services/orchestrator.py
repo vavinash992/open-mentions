@@ -4,7 +4,10 @@ import asyncio
 from typing import Optional
 
 from loguru import logger
+from sqlalchemy import select
 
+from mentions.db.session import async_session_maker
+from mentions.models.database import Mention
 from mentions.scrapers.base import ScrapedItem
 from mentions.scrapers.devto import DevtoScraper
 from mentions.scrapers.hacker_news import HackerNewsScraper
@@ -75,19 +78,39 @@ class SearchOrchestrator:
 
         logger.info(f"Scraped {len(items)} total items across all platforms")
 
-        # Process all raw results through LLM processor for classification and summarization
+        if not items:
+            logger.info("No items to process")
+            return []
+
+        # Check database for existing URLs to avoid re-processing
+        new_items, existing_urls = await self._filter_existing_urls(items)
+
+        logger.info(f"Found {len(existing_urls)} existing mentions in database, {len(new_items)} new items to process")
+
+        # Process only new items through LLM processor for classification and summarization
         # This enriches items with: relevance_score, is_relevant, sentiment, emotion, summary
-        if items:
-            logger.info(f"Processing {len(items)} raw mentions through LLM classifier...")
-            classified_items = await self.llm_processor.process_mentions(items, company_name)
+        if new_items:
+            logger.info(f"Processing {len(new_items)} new mentions through LLM classifier...")
+            classified_items = await self.llm_processor.process_mentions(new_items, company_name)
         else:
-            logger.info("No items to classify")
+            logger.info("No new items to classify")
             classified_items = []
 
-        # Filter to only relevant items
-        relevant_items = [item for item in classified_items if item.is_relevant]
+        # Save new classified items to database
+        if classified_items:
+            await self._save_to_database(classified_items)
+            logger.info(f"Saved {len(classified_items)} new mentions to database")
 
-        logger.info(f"After classification: {len(relevant_items)} relevant items out of {len(classified_items)} total")
+        # Fetch existing items from database to include in results
+        existing_items = await self._fetch_existing_items(existing_urls, company_name)
+
+        # Combine new and existing items
+        all_items = classified_items + existing_items
+
+        # Filter to only relevant items
+        relevant_items = [item for item in all_items if item.is_relevant]
+
+        logger.info(f"After classification: {len(relevant_items)} relevant items out of {len(all_items)} total")
 
         return relevant_items
 
@@ -132,6 +155,90 @@ class SearchOrchestrator:
             return []
         else:
             return items
+
+    async def _filter_existing_urls(self, items: list[ScrapedItem]) -> tuple[list[ScrapedItem], list[str]]:
+        """
+        Filter out items that already exist in the database.
+
+        Args:
+            items: List of ScrapedItem objects to check.
+
+        Returns:
+            Tuple of (new_items, existing_urls) where new_items are items not in DB,
+            and existing_urls is a list of URLs that already exist.
+        """
+        if not items:
+            return [], []
+
+        urls = [item.url for item in items]
+
+        async with async_session_maker() as session:
+            # Query for existing URLs
+            statement = select(Mention.url).where(Mention.url.in_(urls))
+            result = await session.execute(statement)
+            existing_urls = {row[0] for row in result.all()}
+
+        # Filter out existing items
+        new_items = [item for item in items if item.url not in existing_urls]
+
+        return new_items, list(existing_urls)
+
+    async def _save_to_database(self, items: list[ScrapedItem]) -> None:
+        """
+        Save classified items to the database.
+
+        Since url is primary key, duplicates will raise IntegrityError which we catch and skip.
+
+        Args:
+            items: List of ScrapedItem objects to save.
+        """
+        if not items:
+            return
+
+        saved_count = 0
+        async with async_session_maker() as session:
+            for item in items:
+                try:
+                    # Convert ScrapedItem to Mention and save
+                    mention = Mention.from_scraped_item(item)
+                    session.add(mention)
+                    await session.commit()
+                    saved_count += 1
+                except Exception as e:
+                    # Skip duplicates (IntegrityError) or other errors
+                    await session.rollback()
+                    logger.debug(f"Skipping duplicate or error for {item.url}: {e}")
+                    continue
+
+        logger.info(f"Saved {saved_count} new mentions to database")
+
+    async def _fetch_existing_items(self, urls: list[str], company_name: str) -> list[ScrapedItem]:
+        """
+        Fetch existing items from database that match the company search.
+
+        Args:
+            urls: List of URLs that exist in database.
+            company_name: Company name to filter by (only return relevant items).
+
+        Returns:
+            List of ScrapedItem objects from database.
+        """
+        if not urls:
+            return []
+
+        async with async_session_maker() as session:
+            # Fetch mentions from database
+            statement = (
+                select(Mention)
+                .where(Mention.url.in_(urls))
+                .where(Mention.keyword == company_name)
+                .where(Mention.is_relevant == True)  # noqa: E712
+            )
+            result = await session.execute(statement)
+            mentions = result.scalars().all()
+
+        # Convert Mention models back to ScrapedItem
+        return [mention.to_scraped_item() for mention in mentions]
 
 
 async def search_all_platforms(
