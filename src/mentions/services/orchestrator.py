@@ -75,8 +75,14 @@ class SearchOrchestrator:
 
         logger.info(f"Scraped {len(items)} total items across all platforms")
 
-        # Classify all items concurrently
-        classified_items = await self._classify_items(items, company_name)
+        # Process all raw results through LLM processor for classification and summarization
+        # This enriches items with: relevance_score, is_relevant, sentiment, emotion, summary
+        if items:
+            logger.info(f"Processing {len(items)} raw mentions through LLM classifier...")
+            classified_items = await self.llm_processor.process_mentions(items, company_name)
+        else:
+            logger.info("No items to classify")
+            classified_items = []
 
         # Filter to only relevant items
         relevant_items = [item for item in classified_items if item.is_relevant]
@@ -126,120 +132,6 @@ class SearchOrchestrator:
             return []
         else:
             return items
-
-    async def _classify_items(self, items: list[ScrapedItem], company_name: str) -> list[ScrapedItem]:
-        """
-        Classify all items concurrently using LLM.
-
-        First pass: Basic relevance check only (saves tokens).
-        Second pass: Detailed analysis (emotion, summary) only for relevant items.
-
-        Args:
-            items: List of ScrapedItem objects to classify.
-            company_name: Company name for relevance checking.
-
-        Returns:
-            List of ScrapedItem objects with classification fields populated.
-        """
-        if not items:
-            return []
-
-        logger.info(f"Classifying {len(items)} items using LLM (two-pass: basic then detailed)...")
-
-        # First pass: Basic classification only (without emotion/summary to save tokens)
-        basic_tasks = [self._classify_single_item(item, company_name, include_detailed=False) for item in items]
-
-        # Run basic classifications concurrently
-        basic_classified = await asyncio.gather(*basic_tasks, return_exceptions=True)
-
-        # Process basic results and identify relevant items
-        basic_results: list[ScrapedItem] = []
-        relevant_items_to_enrich: list[ScrapedItem] = []
-
-        for item, classified in zip(items, basic_classified):
-            if isinstance(classified, Exception):
-                logger.error(f"Error in basic classification for item {item.url}: {classified}")
-                # Keep item with default (non-relevant) classification
-                item.is_relevant = False
-                item.sentiment = "neutral"
-                item.confidence_score = 0.0
-                item.reasoning = f"Classification error: {classified!s}"
-                basic_results.append(item)
-            elif isinstance(classified, ScrapedItem):
-                basic_results.append(classified)
-                # Only enrich relevant items with detailed analysis
-                if classified.is_relevant:
-                    relevant_items_to_enrich.append(classified)
-            else:
-                # Fallback: keep original item
-                item.is_relevant = False
-                basic_results.append(item)
-
-        # Second pass: Detailed analysis (emotion, summary) only for relevant items
-        if relevant_items_to_enrich:
-            logger.info(
-                f"Performing detailed analysis (emotion, summary) on {len(relevant_items_to_enrich)} relevant items..."
-            )
-            detailed_tasks = [
-                self._classify_single_item(item, company_name, include_detailed=True)
-                for item in relevant_items_to_enrich
-            ]
-
-            # Run detailed classifications concurrently
-            detailed_classified = await asyncio.gather(*detailed_tasks, return_exceptions=True)
-
-            # Update relevant items with detailed analysis
-            for item, detailed in zip(relevant_items_to_enrich, detailed_classified):
-                if isinstance(detailed, Exception):
-                    logger.error(f"Error in detailed classification for item {item.url}: {detailed}")
-                    # Keep basic classification, set emotion/summary to None
-                    item.emotion = None
-                    item.summary = None
-                elif isinstance(detailed, ScrapedItem):
-                    # Update with detailed fields
-                    item.emotion = detailed.emotion
-                    item.summary = detailed.summary
-
-        return basic_results
-
-    async def _classify_single_item(
-        self, item: ScrapedItem, company_name: str, include_detailed: bool = True
-    ) -> ScrapedItem:
-        """
-        Classify a single item and update its fields.
-
-        Args:
-            item: ScrapedItem to classify.
-            company_name: Company name for relevance checking.
-            include_detailed: If True, includes emotion and summary analysis.
-
-        Returns:
-            ScrapedItem with classification fields populated.
-        """
-        try:
-            classification = await self.llm_processor.classify(item, company_name, include_detailed)
-
-            # Update item with classification results
-            item.is_relevant = classification.is_relevant
-            item.sentiment = classification.sentiment
-            item.confidence_score = classification.confidence_score
-            item.reasoning = classification.reasoning
-
-            # Update detailed fields if included
-            if include_detailed:
-                item.emotion = classification.emotion
-                item.summary = classification.summary
-        except Exception as e:
-            logger.error(f"Error classifying item {item.url}: {e}")
-            # Return item with default values
-            item.is_relevant = False
-            item.sentiment = "neutral"
-            item.confidence_score = 0.0
-            item.reasoning = f"Classification error: {e!s}"
-            if include_detailed:
-                item.emotion = None
-                item.summary = None
-        return item
 
 
 async def search_all_platforms(

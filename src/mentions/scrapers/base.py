@@ -21,33 +21,29 @@ class ScrapedItem(BaseModel):
     content: str = Field(..., description="The main content of the scraped item.")
     url: str = Field(..., description="The URL of the scraped item.")
     upvotes: Optional[int] = Field(None, description="Number of upvotes or likes the item received.")
-    sentiment: str | None = Field(
-        None,
-        description="Sentiment classification of the content (e.g., positive, negative, neutral).",
-    )
     mention_type: str | None = Field(None, description="Type of mention (e.g., post, comment).")
     user_id: Optional[str] = Field(None, description="Unique identifier for the user who created the item.")
     user_profile_url: Optional[str] = Field(None, description="URL to the user's profile on the platform.")
     timestamp: Optional[str] = Field(None, description="Timestamp when the item was created or posted.")
     comments: Optional[int] = Field(None, description="Number of comments associated with the item.")
     # LLM Classification fields
+    relevance_score: float | None = Field(
+        None,
+        ge=0.0,
+        le=1.0,
+        description="Relevance score indicating how relevant the mention is to the target company (0.0 to 1.0).",
+    )
     is_relevant: bool | None = Field(
         None,
         description="Whether this mention is actually about the target company (LLM classified).",
     )
-    confidence_score: float | None = Field(
+    sentiment: str | None = Field(
         None,
-        ge=0.0,
-        le=1.0,
-        description="Confidence score for the classification (0.0 to 1.0).",
-    )
-    reasoning: str | None = Field(
-        None,
-        description="Short explanation of the classification provided by LLM.",
+        description="Sentiment classification of the content (positive, negative, neutral).",
     )
     emotion: str | None = Field(
         None,
-        description="Primary emotion detected in the text (e.g., 'frustration', 'joy', 'curiosity', 'disappointment', 'anger', 'neutral').",
+        description="Primary emotion detected in the text (e.g., 'frustration', 'joy', 'curiosity', 'disappointment', 'anger', 'neutral', 'excitement', 'concern', 'satisfaction', 'confusion').",
     )
     summary: str | None = Field(
         None,

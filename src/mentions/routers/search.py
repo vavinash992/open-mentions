@@ -51,7 +51,7 @@ class SearchResponse(BaseModel):
     )
     average_confidence: float = Field(
         ...,
-        description="Average confidence score across all mentions",
+        description="Average relevance score across all mentions",
     )
     mentions: list[ScrapedItem] = Field(..., description="List of classified relevant mentions")
 
@@ -98,15 +98,15 @@ async def search_mentions(request: SearchRequest) -> SearchResponse:
         platform_counter = Counter(item.platform for item in mentions)
         platform_breakdown = dict(platform_counter)
 
-        # Average confidence
-        confidence_scores = [item.confidence_score for item in mentions if item.confidence_score is not None]
-        average_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
+        # Average relevance score
+        relevance_scores = [item.relevance_score for item in mentions if item.relevance_score is not None]
+        average_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
 
         return SearchResponse(
             total_mentions=total_mentions,
             sentiment_breakdown=sentiment_breakdown,
             platform_breakdown=platform_breakdown,
-            average_confidence=round(average_confidence, 3),
+            average_confidence=round(average_relevance, 3),  # Using relevance_score as confidence
             mentions=mentions,
         )
 
