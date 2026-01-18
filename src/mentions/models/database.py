@@ -111,3 +111,28 @@ class Mention(SQLModel, table=True):
             emotion=self.emotion,
             summary=self.summary,
         )
+
+
+class TrackedKeyword(SQLModel, table=True):
+    """
+    Database model for tracking keywords that should be monitored automatically.
+
+    Used by the periodic monitoring script to know which keywords to search for.
+    """
+
+    __tablename__ = "tracked_keywords"
+
+    id: Optional[int] = Field(default=None, primary_key=True, description="Unique identifier for the tracked keyword")
+    keyword: str = Field(..., unique=True, description="The keyword/company name to track")
+    is_active: bool = Field(
+        default=True,
+        description="Whether this keyword is currently being actively monitored",
+    )
+    last_searched_at: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp of the last time this keyword was searched",
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Timestamp when the keyword was first added for tracking",
+    )

@@ -154,6 +154,10 @@ venv.bak/
 *.sqlite
 *.sqlite3
 
+# Log files
+*.log
+monitor.log
+
 # Spyder project settings
 .spyderproject
 .spyproject
