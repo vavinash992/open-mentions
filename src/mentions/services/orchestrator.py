@@ -7,7 +7,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from mentions.db.session import async_session_maker
-from mentions.models.database import Mention
+from mentions.models.database import Mention, WorkspaceMention
 from mentions.scrapers.base import ScrapedItem
 from mentions.scrapers.devto import DevtoScraper
 from mentions.scrapers.hacker_news import HackerNewsScraper
@@ -33,7 +33,8 @@ class SearchOrchestrator:
         company_name: str,
         filter_by: str = "week",
         max_results_per_platform: int = 50,
-        workspace_id: Optional[str] = None,
+        workspace_id: str = "",
+        include_existing: bool = True,
     ) -> list[ScrapedItem]:
         """
         Search all available platforms concurrently and classify results.
@@ -42,7 +43,9 @@ class SearchOrchestrator:
             company_name: The company name to search for.
             filter_by: Time filter (e.g., 'day', 'week', 'month', 'year').
             max_results_per_platform: Maximum results to fetch per platform.
-            workspace_id: Optional workspace ID for multi-tenant isolation.
+            workspace_id: Workspace ID for multi-tenant isolation.
+            include_existing: If True, return all relevant mentions for this search.
+                If False, return only newly-linked mentions for this workspace+keyword.
 
         Returns:
             List of classified ScrapedItem objects (only relevant ones).
@@ -86,37 +89,37 @@ class SearchOrchestrator:
             logger.info("No items to process")
             return []
 
-        # Check database for existing URLs to avoid re-processing
-        new_items, existing_urls = await self._filter_existing_urls(items, workspace_id)
+        if not workspace_id:
+            # The API layer should enforce this; keep a safe no-op fallback.
+            return []
 
-        logger.info(f"Found {len(existing_urls)} existing mentions in database, {len(new_items)} new items to process")
+        # Global URL deduplication: only classify URLs that don't exist in Mention table.
+        new_items, existing_urls = await self._split_by_global_dedup(items)
+        logger.info(
+            f"Global dedup: {len(existing_urls)} URL(s) already classified, {len(new_items)} new URL(s) to classify"
+        )
 
-        # Process only new items through LLM processor for classification and summarization
-        # This enriches items with: relevance_score, is_relevant, sentiment, emotion, summary
+        # Classify only new URLs
         if new_items:
-            logger.info(f"Processing {len(new_items)} new mentions through LLM classifier...")
-            classified_items = await self.llm_processor.process_mentions(new_items, company_name)
+            logger.info(f"Classifying {len(new_items)} new URL(s) with LLM...")
+            classified_new_items = await self.llm_processor.process_mentions(new_items, company_name)
+            # Persist newly classified mentions globally (one per URL)
+            await self._save_mentions_global(classified_new_items)
         else:
-            logger.info("No new items to classify")
-            classified_items = []
+            classified_new_items = []
 
-        # Save new classified items to database
-        if classified_items:
-            await self._save_to_database(classified_items, workspace_id)
-            logger.info(f"Saved {len(classified_items)} new mentions to database")
+        # Link relevant mentions to this workspace (association table)
+        urls_to_link = [item.url for item in items]
+        linked_items = await self._link_workspace_mentions(
+            workspace_id=workspace_id,
+            keyword=company_name,
+            urls=urls_to_link,
+            include_existing=include_existing,
+        )
 
-        # Fetch existing items from database to include in results
-        existing_items = await self._fetch_existing_items(existing_urls, company_name, workspace_id)
-
-        # Combine new and existing items
-        all_items = classified_items + existing_items
-
-        # Filter to only relevant items
-        relevant_items = [item for item in all_items if item.is_relevant]
-
-        logger.info(f"After classification: {len(relevant_items)} relevant items out of {len(all_items)} total")
-
-        return relevant_items
+        # Only return relevant mentions for this workspace+keyword (as ScrapedItem)
+        logger.info(f"Returning {len(linked_items)} relevant mention(s) for workspace '{workspace_id}'")
+        return linked_items
 
     async def _scrape_platform(
         self,
@@ -160,104 +163,92 @@ class SearchOrchestrator:
         else:
             return items
 
-    async def _filter_existing_urls(
-        self, items: list[ScrapedItem], workspace_id: Optional[str] = None
-    ) -> tuple[list[ScrapedItem], list[str]]:
+    async def _split_by_global_dedup(self, items: list[ScrapedItem]) -> tuple[list[ScrapedItem], list[str]]:
         """
-        Filter out items that already exist in the database.
+        Split items into (new_items, existing_urls) using global URL deduplication.
 
-        Args:
-            items: List of ScrapedItem objects to check.
-            workspace_id: Optional workspace ID to scope the check.
-
-        Returns:
-            Tuple of (new_items, existing_urls) where new_items are items not in DB,
-            and existing_urls is a list of URLs that already exist.
+        If a URL already exists in Mention table, we won't call the LLM again.
         """
         if not items:
             return [], []
 
-        urls = [item.url for item in items]
-
+        urls = list({item.url for item in items})
         async with async_session_maker() as session:
-            # Query for existing URLs
             statement = select(Mention.url).where(Mention.url.in_(urls))
-            if workspace_id:
-                statement = statement.where(Mention.workspace_id == workspace_id)
             result = await session.execute(statement)
             existing_urls = {row[0] for row in result.all()}
 
-        # Filter out existing items
         new_items = [item for item in items if item.url not in existing_urls]
+        return new_items, sorted(existing_urls)
 
-        return new_items, list(existing_urls)
-
-    async def _save_to_database(self, items: list[ScrapedItem], workspace_id: Optional[str] = None) -> None:
+    async def _save_mentions_global(self, items: list[ScrapedItem]) -> None:
         """
-        Save classified items to the database.
-
-        Since url is primary key, duplicates will raise IntegrityError which we catch and skip.
-
-        Args:
-            items: List of ScrapedItem objects to save.
-            workspace_id: Workspace ID to associate with mentions.
+        Save newly classified mentions globally (one row per URL).
         """
         if not items:
             return
 
-        # Default workspace_id if not provided
-        if workspace_id is None:
-            workspace_id = "default"
-
-        saved_count = 0
         async with async_session_maker() as session:
             for item in items:
                 try:
-                    # Convert ScrapedItem to Mention with workspace_id
-                    mention = Mention.from_scraped_item(item, workspace_id)
+                    mention = Mention.from_scraped_item(item)
                     session.add(mention)
                     await session.commit()
-                    saved_count += 1
                 except Exception as e:
-                    # Skip duplicates (IntegrityError) or other errors
                     await session.rollback()
-                    logger.debug(f"Skipping duplicate or error for {item.url}: {e}")
-                    continue
+                    logger.debug(f"Skipping mention save for {item.url}: {e}")
 
-        logger.info(f"Saved {saved_count} new mentions to database")
-
-    async def _fetch_existing_items(
-        self, urls: list[str], company_name: str, workspace_id: Optional[str] = None
+    async def _link_workspace_mentions(
+        self,
+        *,
+        workspace_id: str,
+        keyword: str,
+        urls: list[str],
+        include_existing: bool,
     ) -> list[ScrapedItem]:
         """
-        Fetch existing items from database that match the company search.
+        Ensure WorkspaceMention links exist for relevant mentions for this workspace+keyword.
 
-        Args:
-            urls: List of URLs that exist in database.
-            company_name: Company name to filter by (only return relevant items).
-            workspace_id: Optional workspace ID to scope the fetch.
-
-        Returns:
-            List of ScrapedItem objects from database.
+        Returns ScrapedItem list (relevant only) for API responses.
         """
         if not urls:
             return []
 
+        # Fetch global mentions for these URLs (relevant only)
         async with async_session_maker() as session:
-            # Fetch mentions from database
-            statement = (
-                select(Mention)
-                .where(Mention.url.in_(urls))
-                .where(Mention.keyword == company_name)
-                .where(Mention.is_relevant == True)  # noqa: E712
-            )
-            if workspace_id:
-                statement = statement.where(Mention.workspace_id == workspace_id)
-            result = await session.execute(statement)
+            stmt = select(Mention).where(Mention.url.in_(urls)).where(Mention.is_relevant == True)  # noqa: E712
+            result = await session.execute(stmt)
             mentions = result.scalars().all()
 
-        # Convert Mention models back to ScrapedItem
-        return [mention.to_scraped_item() for mention in mentions]
+        if not mentions:
+            return []
+
+        # Determine which links already exist for this workspace+keyword
+        async with async_session_maker() as session:
+            existing_stmt = (
+                select(WorkspaceMention.mention_url)
+                .where(WorkspaceMention.workspace_id == workspace_id)
+                .where(WorkspaceMention.keyword == keyword)
+                .where(WorkspaceMention.mention_url.in_([m.url for m in mentions]))
+            )
+            existing_result = await session.execute(existing_stmt)
+            existing_links = {row[0] for row in existing_result.all()}
+
+        new_links = [m for m in mentions if m.url not in existing_links]
+
+        # Insert new workspace links (idempotent via PK)
+        async with async_session_maker() as session:
+            for m in new_links:
+                try:
+                    link = WorkspaceMention(workspace_id=workspace_id, mention_url=m.url, keyword=keyword)
+                    session.add(link)
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+
+        if include_existing:
+            return [m.to_scraped_item(keyword=keyword) for m in mentions]
+        return [m.to_scraped_item(keyword=keyword) for m in new_links]
 
 
 async def search_all_platforms(

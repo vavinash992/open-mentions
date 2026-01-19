@@ -5,6 +5,10 @@ import string
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+
+from mentions.db.session import async_session_maker
+from mentions.models.database import Workspace
 
 workspace_router = APIRouter(prefix="/api/v1", tags=["workspace"])
 
@@ -42,7 +46,18 @@ async def create_workspace() -> WorkspaceResponse:
     Returns:
         WorkspaceResponse with the new workspace ID.
     """
-    workspace_id = generate_workspace_id()
+    # Generate and persist a unique workspace_id
+    async with async_session_maker() as session:
+        while True:
+            workspace_id = generate_workspace_id()
+            exists_stmt = select(Workspace).where(Workspace.workspace_id == workspace_id)
+            result = await session.execute(exists_stmt)
+            if result.scalar_one_or_none() is None:
+                break
+
+        session.add(Workspace(workspace_id=workspace_id))
+        await session.commit()
+
     return WorkspaceResponse(
         workspace_id=workspace_id,
         message="New workspace created. Save this ID - it's required for all API calls.",

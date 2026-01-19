@@ -2,15 +2,15 @@
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from mentions.db.session import async_session_maker
-from mentions.models.database import TrackedKeyword, WorkspaceRateLimit
+from mentions.models.database import TrackedKeyword, Workspace, WorkspaceRateLimit
+from mentions.services.monitoring_scheduler import get_scheduler
 from mentions.services.orchestrator import SearchOrchestrator
-from mentions.services.scheduler import get_scheduler
 
 monitor_router = APIRouter(prefix="/api/v1", tags=["monitor"])
 
@@ -99,7 +99,8 @@ async def update_rate_limit(workspace_id: str) -> None:
 
 @monitor_router.post("/monitor/trigger", response_model=WorkspaceMonitoringResponse)
 async def trigger_monitoring(
-    workspace_id: str = Header(..., alias="X-Workspace-ID", description="Workspace ID"),
+    workspace_id: str | None = Query(None, description="Workspace ID"),
+    workspace_id_header: str | None = Header(None, alias="X-Workspace-ID", description="Workspace ID (legacy)"),
 ) -> WorkspaceMonitoringResponse:
     """
     Manually trigger a monitoring run for a workspace's active keywords.
@@ -115,6 +116,24 @@ async def trigger_monitoring(
     Raises:
         HTTPException: If rate limited or no keywords found.
     """
+    # Resolve workspace_id (prefer query param)
+    workspace_id = workspace_id or workspace_id_header
+    if not workspace_id:
+        raise HTTPException(
+            status_code=400,
+            detail="workspace_id is required (pass as query param ?workspace_id=... or header X-Workspace-ID).",
+        )
+
+    # Ensure workspace exists
+    async with async_session_maker() as session:
+        ws_stmt = select(Workspace).where(Workspace.workspace_id == workspace_id)
+        ws_result = await session.execute(ws_stmt)
+        if ws_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Workspace not found. Create one via GET /api/v1/workspace/new.",
+            )
+
     # Check rate limit
     is_allowed, next_allowed = await check_rate_limit(workspace_id)
 
@@ -160,6 +179,7 @@ async def trigger_monitoring(
                 filter_by="week",
                 max_results_per_platform=50,
                 workspace_id=workspace_id,
+                include_existing=False,
             )
 
             # Update last_searched_at

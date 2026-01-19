@@ -7,7 +7,7 @@ from loguru import logger
 
 from mentions.db.session import init_db
 from mentions.routers import history, keywords, monitor, search, workspace
-from mentions.services.scheduler import get_scheduler
+from mentions.services.monitoring_scheduler import get_scheduler
 
 # Load environment variables from .env file
 load_dotenv()

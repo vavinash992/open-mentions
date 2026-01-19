@@ -97,6 +97,7 @@ async def monitor_keywords(filter_by: str = "week", max_results_per_platform: in
                     filter_by=filter_by,
                     max_results_per_platform=max_results_per_platform,
                     workspace_id=workspace_id,
+                    include_existing=False,
                 )
 
                 # Count new mentions (mentions that were just added)

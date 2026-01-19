@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from mentions.db.session import async_session_maker
-from mentions.models.database import TrackedKeyword
+from mentions.models.database import TrackedKeyword, Workspace
 
 keywords_router = APIRouter(prefix="/api/v1", tags=["keywords"])
 
@@ -70,6 +70,15 @@ async def create_keyword(
         HTTPException: If limit exceeded or keyword already exists.
     """
     async with async_session_maker() as session:
+        # Ensure workspace exists
+        ws_stmt = select(Workspace).where(Workspace.workspace_id == workspace_id)
+        ws_result = await session.execute(ws_stmt)
+        if ws_result.scalar_one_or_none() is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Workspace not found. Create one via GET /api/v1/workspace/new.",
+            )
+
         # Check current active keyword count for this workspace
         count_statement = (
             select(func.count())
@@ -82,8 +91,8 @@ async def create_keyword(
 
     if active_count >= MAX_KEYWORDS_PER_WORKSPACE:
         raise HTTPException(
-            status_code=429,
-            detail=f"Workspace limit reached: Maximum {MAX_KEYWORDS_PER_WORKSPACE} active keywords allowed per workspace.",
+            status_code=403,
+            detail=f"Keyword limit reached: Maximum {MAX_KEYWORDS_PER_WORKSPACE} active keywords allowed per workspace.",
         )
 
     async with async_session_maker() as session:

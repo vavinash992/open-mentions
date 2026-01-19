@@ -2,7 +2,7 @@
 
 from collections import Counter
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from mentions.scrapers.base import ScrapedItem
@@ -57,7 +57,11 @@ class SearchResponse(BaseModel):
 
 
 @search_router.post("/search", response_model=SearchResponse)
-async def search_mentions(request: SearchRequest) -> SearchResponse:
+async def search_mentions(
+    request: SearchRequest,
+    workspace_id: str | None = Query(None, description="Workspace ID"),
+    workspace_id_header: str | None = Header(None, alias="X-Workspace-ID", description="Workspace ID (legacy)"),
+) -> SearchResponse:
     """
     Search for company mentions across all platforms and classify them.
 
@@ -75,12 +79,20 @@ async def search_mentions(request: SearchRequest) -> SearchResponse:
     Raises:
         HTTPException: If search fails or returns an error
     """
+    workspace_id = workspace_id or workspace_id_header
+    if not workspace_id:
+        raise HTTPException(
+            status_code=400,
+            detail="workspace_id is required (pass as query param ?workspace_id=... or header X-Workspace-ID).",
+        )
+
     try:
         # Run search across all platforms
         mentions = await search_all_platforms(
             company_name=request.company_name,
             filter_by=request.filter_by,
             max_results_per_platform=request.max_results_per_platform,
+            workspace_id=workspace_id,
         )
 
         # Calculate analytics
@@ -110,5 +122,7 @@ async def search_mentions(request: SearchRequest) -> SearchResponse:
             mentions=mentions,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e!s}") from e
