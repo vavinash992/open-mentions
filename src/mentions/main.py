@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from mentions.db.session import init_db
-from mentions.routers import history, monitor, search
+from mentions.routers import history, keywords, monitor, search, workspace
 from mentions.services.scheduler import get_scheduler
 
 # Load environment variables from .env file
@@ -50,6 +50,8 @@ app.add_middleware(
 app.include_router(search.search_router)
 app.include_router(history.history_router)
 app.include_router(monitor.monitor_router)
+app.include_router(keywords.keywords_router)
+app.include_router(workspace.workspace_router)
 
 
 @app.get("/")

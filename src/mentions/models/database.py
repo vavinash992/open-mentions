@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, Index, SQLModel
 
 
 class Mention(SQLModel, table=True):
@@ -11,12 +11,17 @@ class Mention(SQLModel, table=True):
     Database model for storing scraped mentions.
 
     Mirrors ScrapedItem but with database-specific fields.
-    Uses url as primary key to prevent duplicates.
+    Uses url + workspace_id as composite key to allow same URL in different workspaces.
     """
 
     __tablename__ = "mentions"
+    __table_args__ = (
+        Index("ix_mentions_workspace_id", "workspace_id"),
+        Index("ix_mentions_workspace_keyword", "workspace_id", "keyword"),
+    )
 
     url: str = Field(primary_key=True, description="The URL of the scraped item (unique identifier)")
+    workspace_id: str = Field(..., index=True, description="The workspace this mention belongs to")
     keyword: str = Field(..., description="The keyword that was searched for.")
     platform: str = Field(..., description="The platform from which the item was scraped.")
     content: str = Field(..., description="The main content of the scraped item.")
@@ -57,18 +62,20 @@ class Mention(SQLModel, table=True):
     )
 
     @classmethod
-    def from_scraped_item(cls, item: "ScrapedItem") -> "Mention":  # noqa: F821
+    def from_scraped_item(cls, item: "ScrapedItem", workspace_id: str) -> "Mention":  # noqa: F821
         """
         Create a Mention database model from a ScrapedItem.
 
         Args:
             item: ScrapedItem object to convert.
+            workspace_id: The workspace ID to associate with this mention.
 
         Returns:
             Mention database model instance.
         """
         return cls(
             url=item.url,
+            workspace_id=workspace_id,
             keyword=item.keyword,
             platform=item.platform,
             content=item.content,
@@ -118,12 +125,18 @@ class TrackedKeyword(SQLModel, table=True):
     Database model for tracking keywords that should be monitored automatically.
 
     Used by the periodic monitoring script to know which keywords to search for.
+    Keywords are scoped to workspaces for multi-tenant isolation.
     """
 
     __tablename__ = "tracked_keywords"
+    __table_args__ = (
+        Index("ix_tracked_keywords_workspace_id", "workspace_id"),
+        Index("ix_tracked_keywords_workspace_active", "workspace_id", "is_active"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True, description="Unique identifier for the tracked keyword")
-    keyword: str = Field(..., unique=True, description="The keyword/company name to track")
+    workspace_id: str = Field(..., index=True, description="The workspace this keyword belongs to")
+    keyword: str = Field(..., description="The keyword/company name to track")
     is_active: bool = Field(
         default=True,
         description="Whether this keyword is currently being actively monitored",
@@ -135,4 +148,20 @@ class TrackedKeyword(SQLModel, table=True):
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         description="Timestamp when the keyword was first added for tracking",
+    )
+
+
+class WorkspaceRateLimit(SQLModel, table=True):
+    """
+    Database model for tracking rate limits per workspace.
+
+    Used to enforce rate limiting on manual monitoring triggers.
+    """
+
+    __tablename__ = "workspace_rate_limits"
+
+    workspace_id: str = Field(primary_key=True, description="The workspace ID")
+    last_trigger_at: Optional[datetime] = Field(
+        default=None,
+        description="Timestamp of the last manual monitoring trigger",
     )

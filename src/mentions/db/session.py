@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlmodel import SQLModel
 
 # Import models to register them with SQLModel metadata
-from mentions.models.database import Mention, TrackedKeyword  # noqa: F401
+from mentions.models.database import Mention, TrackedKeyword, WorkspaceRateLimit  # noqa: F401
 
 # Database file path - stored in project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent

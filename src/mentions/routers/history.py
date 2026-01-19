@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 
@@ -16,6 +16,7 @@ history_router = APIRouter(prefix="/api/v1", tags=["history"])
 class HistoryResponse(BaseModel):
     """Response model for history endpoint."""
 
+    workspace_id: str = Field(..., description="The workspace ID")
     total_mentions: int = Field(..., description="Total number of mentions in database")
     mentions: list[ScrapedItem] = Field(..., description="List of stored mentions")
     page: int = Field(..., description="Current page number")
@@ -25,6 +26,7 @@ class HistoryResponse(BaseModel):
 
 @history_router.get("/history", response_model=HistoryResponse)
 async def get_history(
+    workspace_id: str = Header(..., alias="X-Workspace-ID", description="Workspace ID"),
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(50, ge=1, le=200, description="Number of items per page"),
     platform: Optional[str] = Query(None, description="Filter by platform"),
@@ -51,8 +53,8 @@ async def get_history(
     """
     try:
         async with async_session_maker() as session:
-            # Build base query with filters
-            base_query = select(Mention)
+            # Build base query with workspace filter
+            base_query = select(Mention).where(Mention.workspace_id == workspace_id)
 
             if platform:
                 base_query = base_query.where(Mention.platform == platform)
@@ -83,6 +85,7 @@ async def get_history(
             total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
 
             return HistoryResponse(
+                workspace_id=workspace_id,
                 total_mentions=total_count,
                 mentions=scraped_items,
                 page=page,

@@ -33,6 +33,7 @@ class SearchOrchestrator:
         company_name: str,
         filter_by: str = "week",
         max_results_per_platform: int = 50,
+        workspace_id: Optional[str] = None,
     ) -> list[ScrapedItem]:
         """
         Search all available platforms concurrently and classify results.
@@ -41,11 +42,14 @@ class SearchOrchestrator:
             company_name: The company name to search for.
             filter_by: Time filter (e.g., 'day', 'week', 'month', 'year').
             max_results_per_platform: Maximum results to fetch per platform.
+            workspace_id: Optional workspace ID for multi-tenant isolation.
 
         Returns:
             List of classified ScrapedItem objects (only relevant ones).
         """
         logger.info(f"Starting search for '{company_name}' across all platforms with filter '{filter_by}'")
+        if workspace_id:
+            logger.info(f"Workspace ID: '{workspace_id}'")
 
         # Initialize all scrapers
         scrapers = [
@@ -83,7 +87,7 @@ class SearchOrchestrator:
             return []
 
         # Check database for existing URLs to avoid re-processing
-        new_items, existing_urls = await self._filter_existing_urls(items)
+        new_items, existing_urls = await self._filter_existing_urls(items, workspace_id)
 
         logger.info(f"Found {len(existing_urls)} existing mentions in database, {len(new_items)} new items to process")
 
@@ -98,11 +102,11 @@ class SearchOrchestrator:
 
         # Save new classified items to database
         if classified_items:
-            await self._save_to_database(classified_items)
+            await self._save_to_database(classified_items, workspace_id)
             logger.info(f"Saved {len(classified_items)} new mentions to database")
 
         # Fetch existing items from database to include in results
-        existing_items = await self._fetch_existing_items(existing_urls, company_name)
+        existing_items = await self._fetch_existing_items(existing_urls, company_name, workspace_id)
 
         # Combine new and existing items
         all_items = classified_items + existing_items
@@ -156,12 +160,15 @@ class SearchOrchestrator:
         else:
             return items
 
-    async def _filter_existing_urls(self, items: list[ScrapedItem]) -> tuple[list[ScrapedItem], list[str]]:
+    async def _filter_existing_urls(
+        self, items: list[ScrapedItem], workspace_id: Optional[str] = None
+    ) -> tuple[list[ScrapedItem], list[str]]:
         """
         Filter out items that already exist in the database.
 
         Args:
             items: List of ScrapedItem objects to check.
+            workspace_id: Optional workspace ID to scope the check.
 
         Returns:
             Tuple of (new_items, existing_urls) where new_items are items not in DB,
@@ -175,6 +182,8 @@ class SearchOrchestrator:
         async with async_session_maker() as session:
             # Query for existing URLs
             statement = select(Mention.url).where(Mention.url.in_(urls))
+            if workspace_id:
+                statement = statement.where(Mention.workspace_id == workspace_id)
             result = await session.execute(statement)
             existing_urls = {row[0] for row in result.all()}
 
@@ -183,7 +192,7 @@ class SearchOrchestrator:
 
         return new_items, list(existing_urls)
 
-    async def _save_to_database(self, items: list[ScrapedItem]) -> None:
+    async def _save_to_database(self, items: list[ScrapedItem], workspace_id: Optional[str] = None) -> None:
         """
         Save classified items to the database.
 
@@ -191,16 +200,21 @@ class SearchOrchestrator:
 
         Args:
             items: List of ScrapedItem objects to save.
+            workspace_id: Workspace ID to associate with mentions.
         """
         if not items:
             return
+
+        # Default workspace_id if not provided
+        if workspace_id is None:
+            workspace_id = "default"
 
         saved_count = 0
         async with async_session_maker() as session:
             for item in items:
                 try:
-                    # Convert ScrapedItem to Mention and save
-                    mention = Mention.from_scraped_item(item)
+                    # Convert ScrapedItem to Mention with workspace_id
+                    mention = Mention.from_scraped_item(item, workspace_id)
                     session.add(mention)
                     await session.commit()
                     saved_count += 1
@@ -212,13 +226,16 @@ class SearchOrchestrator:
 
         logger.info(f"Saved {saved_count} new mentions to database")
 
-    async def _fetch_existing_items(self, urls: list[str], company_name: str) -> list[ScrapedItem]:
+    async def _fetch_existing_items(
+        self, urls: list[str], company_name: str, workspace_id: Optional[str] = None
+    ) -> list[ScrapedItem]:
         """
         Fetch existing items from database that match the company search.
 
         Args:
             urls: List of URLs that exist in database.
             company_name: Company name to filter by (only return relevant items).
+            workspace_id: Optional workspace ID to scope the fetch.
 
         Returns:
             List of ScrapedItem objects from database.
@@ -234,6 +251,8 @@ class SearchOrchestrator:
                 .where(Mention.keyword == company_name)
                 .where(Mention.is_relevant == True)  # noqa: E712
             )
+            if workspace_id:
+                statement = statement.where(Mention.workspace_id == workspace_id)
             result = await session.execute(statement)
             mentions = result.scalars().all()
 
@@ -245,6 +264,7 @@ async def search_all_platforms(
     company_name: str,
     filter_by: str = "week",
     max_results_per_platform: int = 50,
+    workspace_id: Optional[str] = None,
 ) -> list[ScrapedItem]:
     """
     Convenience function to search all platforms and classify results.
@@ -253,9 +273,10 @@ async def search_all_platforms(
         company_name: The company name to search for.
         filter_by: Time filter (e.g., 'day', 'week', 'month', 'year').
         max_results_per_platform: Maximum results to fetch per platform.
+        workspace_id: Optional workspace ID for multi-tenant isolation.
 
     Returns:
         List of classified ScrapedItem objects (only relevant ones).
     """
     orchestrator = SearchOrchestrator()
-    return await orchestrator.search_all_platforms(company_name, filter_by, max_results_per_platform)
+    return await orchestrator.search_all_platforms(company_name, filter_by, max_results_per_platform, workspace_id)
