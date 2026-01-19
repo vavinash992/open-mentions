@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
+from mentions.api.v1.analytics import analytics_router
 from mentions.db.session import init_db
 from mentions.routers import history, keywords, monitor, search, workspace
 from mentions.services.monitoring_scheduler import get_scheduler
@@ -52,6 +53,7 @@ app.include_router(history.history_router)
 app.include_router(monitor.monitor_router)
 app.include_router(keywords.keywords_router)
 app.include_router(workspace.workspace_router)
+app.include_router(analytics_router)
 
 
 @app.get("/")
