@@ -3,9 +3,11 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from loguru import logger
 
 from mentions.db.session import init_db
-from mentions.routers import history, search
+from mentions.routers import history, monitor, search
+from mentions.services.scheduler import get_scheduler
 
 # Load environment variables from .env file
 load_dotenv()
@@ -14,11 +16,19 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI startup and shutdown."""
-    # Startup: Initialize database
+    # Startup: Initialize database and start scheduler
     await init_db()
+
+    # Start the monitoring scheduler
+    scheduler = get_scheduler()
+    scheduler.start()
+    logger.info("FastAPI application started with scheduled monitoring enabled")
+
     yield
-    # Shutdown: Cleanup if needed
-    pass
+
+    # Shutdown: Stop scheduler
+    scheduler.stop()
+    logger.info("FastAPI application shutting down - scheduler stopped")
 
 
 app = FastAPI(
@@ -39,6 +49,7 @@ app.add_middleware(
 # Register routers
 app.include_router(search.search_router)
 app.include_router(history.history_router)
+app.include_router(monitor.monitor_router)
 
 
 @app.get("/")
