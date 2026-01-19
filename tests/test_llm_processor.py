@@ -4,6 +4,7 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
 from dotenv import load_dotenv
 
 # Add src to path
@@ -14,6 +15,11 @@ from mentions.services.llm_processor import LLMProcessor
 
 # Load environment variables
 load_dotenv()
+
+pytest.skip(
+    "Manual integration script (Azure required). Run directly: uv run python tests/test_llm_processor.py",
+    allow_module_level=True,
+)
 
 
 async def test_llm_processor():

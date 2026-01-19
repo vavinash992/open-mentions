@@ -178,7 +178,17 @@ class SearchOrchestrator:
             result = await session.execute(statement)
             existing_urls = {row[0] for row in result.all()}
 
-        new_items = [item for item in items if item.url not in existing_urls]
+        # Deduplicate new items by URL as well (avoid classifying the same URL twice in one batch)
+        seen: set[str] = set()
+        new_items: list[ScrapedItem] = []
+        for item in items:
+            if item.url in existing_urls:
+                continue
+            if item.url in seen:
+                continue
+            seen.add(item.url)
+            new_items.append(item)
+
         return new_items, sorted(existing_urls)
 
     async def _save_mentions_global(self, items: list[ScrapedItem]) -> None:

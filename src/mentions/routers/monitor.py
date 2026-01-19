@@ -64,7 +64,12 @@ async def check_rate_limit(workspace_id: str) -> tuple[bool, datetime | None]:
             return True, None
 
         # Check if enough time has passed
-        min_next_trigger = rate_limit.last_trigger_at + timedelta(minutes=RATE_LIMIT_MINUTES)
+        last_trigger_at = rate_limit.last_trigger_at
+        # SQLite may return naive datetimes; treat them as UTC
+        if last_trigger_at.tzinfo is None:
+            last_trigger_at = last_trigger_at.replace(tzinfo=timezone.utc)
+
+        min_next_trigger = last_trigger_at + timedelta(minutes=RATE_LIMIT_MINUTES)
         now = datetime.now(timezone.utc)
 
         if now >= min_next_trigger:

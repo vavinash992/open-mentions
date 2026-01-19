@@ -15,7 +15,6 @@ class Workspace(SQLModel, table=True):
     """
 
     __tablename__ = "workspaces"
-    __table_args__ = (Index("ix_workspaces_workspace_id", "workspace_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
     workspace_id: str = Field(..., unique=True, index=True, description="Public workspace identifier")
@@ -136,7 +135,6 @@ class TrackedKeyword(SQLModel, table=True):
 
     __tablename__ = "tracked_keywords"
     __table_args__ = (
-        Index("ix_tracked_keywords_workspace_id", "workspace_id"),
         Index("ix_tracked_keywords_workspace_active", "workspace_id", "is_active"),
         Index("uq_tracked_keywords_workspace_keyword", "workspace_id", "keyword", unique=True),
     )

@@ -4,6 +4,7 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
 from dotenv import load_dotenv
 
 # Add src to path
@@ -13,6 +14,11 @@ from mentions.services.orchestrator import search_all_platforms
 
 # Load environment variables
 load_dotenv()
+
+pytest.skip(
+    "Manual integration script (network/Azure required). Run directly: uv run python tests/test_orchestrator_manual.py",
+    allow_module_level=True,
+)
 
 
 async def test_orchestrator():
