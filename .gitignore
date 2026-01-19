@@ -215,6 +215,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 
+# npm cache
+.npm-cache/
+
 # Marimo
 marimo/_static/
 marimo/_lsp/
