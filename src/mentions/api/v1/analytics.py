@@ -7,13 +7,14 @@ from pydantic import BaseModel, Field
 
 from mentions.db.session import async_session_maker
 from mentions.services.analytics import (
-    InvalidDaysError,
     KeywordNotFoundError,
     WorkspaceNotFoundError,
+    dominant_sentiment,
     ensure_workspace,
-    get_platform_stats,
-    get_sentiment_stats,
-    get_timeline_counts,
+    get_average_relevance,
+    get_platform_counts,
+    get_sentiment_counts,
+    get_timeline_14_days,
     get_top_emotions,
     get_total_mentions,
     resolve_keyword,
@@ -22,36 +23,30 @@ from mentions.services.analytics import (
 analytics_router = APIRouter(prefix="/api/v1/analytics", tags=["analytics"])
 
 
-class EmotionCount(BaseModel):
-    """Top emotion entry."""
-
-    emotion: str = Field(..., description="Emotion label")
-    count: int = Field(..., description="Number of mentions with this emotion")
-
-
 class SummaryResponse(BaseModel):
     """Summary analytics response."""
 
     workspace_id: str = Field(..., description="Workspace ID")
     total_mentions: int = Field(..., description="Total mentions")
-    sentiment_breakdown: dict[str, float] = Field(..., description="Sentiment percentages")
-    top_emotions: list[EmotionCount] = Field(..., description="Top 3 emotions by count")
-    platform_stats: dict[str, int] = Field(..., description="Counts by platform")
+    average_relevance_score: float = Field(..., description="Average relevance score across mentions")
+    dominant_sentiment: str = Field(..., description="Most frequent sentiment label")
 
 
-class TrendPoint(BaseModel):
-    """Timeline point for trend chart."""
+class ChartSeries(BaseModel):
+    """Chart series formatted for frontend libraries."""
 
-    date: str = Field(..., description="Date (YYYY-MM-DD)")
-    count: int = Field(..., description="Mention count for the date")
+    labels: list[str] = Field(..., description="Labels for the chart")
+    data: list[int] = Field(..., description="Series values aligned with labels")
 
 
-class TrendsResponse(BaseModel):
-    """Timeline analytics response."""
+class ChartsResponse(BaseModel):
+    """Charts analytics response."""
 
     workspace_id: str = Field(..., description="Workspace ID")
-    days: int = Field(..., description="Window size in days (7 or 30)")
-    points: list[TrendPoint] = Field(..., description="Timeline points")
+    sentiment: ChartSeries = Field(..., description="Sentiment pie chart data")
+    timeline: ChartSeries = Field(..., description="Timeline chart data")
+    platforms: ChartSeries = Field(..., description="Platform breakdown data")
+    emotions: ChartSeries = Field(..., description="Emotion cloud data")
 
 
 @analytics_router.get("/summary", response_model=SummaryResponse)
@@ -66,9 +61,8 @@ async def get_summary(
             keyword = await resolve_keyword(session, workspace_id, keyword_id)
 
             total = await get_total_mentions(session, workspace_id, keyword)
-            sentiment_counts = await get_sentiment_stats(session, workspace_id, keyword)
-            platform_stats = await get_platform_stats(session, workspace_id, keyword)
-            top_emotions = await get_top_emotions(session, workspace_id, keyword, limit=3)
+            avg_relevance = await get_average_relevance(session, workspace_id, keyword)
+            sentiment_counts = await get_sentiment_counts(session, workspace_id, keyword)
 
         except WorkspaceNotFoundError as exc:
             raise HTTPException(
@@ -80,36 +74,29 @@ async def get_summary(
                 status_code=404,
                 detail="keyword_id not found for this workspace.",
             ) from exc
-
-    # Convert sentiment counts to percentages
-    sentiment_percentages: dict[str, float] = {}
-    if total > 0:
-        for key, count in sentiment_counts.items():
-            sentiment_percentages[key] = round((count / total) * 100.0, 2)
-    else:
-        sentiment_percentages = {"positive": 0.0, "negative": 0.0, "neutral": 0.0}
 
     return SummaryResponse(
         workspace_id=workspace_id,
         total_mentions=total,
-        sentiment_breakdown=sentiment_percentages,
-        top_emotions=[EmotionCount(emotion=e, count=c) for e, c in top_emotions],
-        platform_stats=platform_stats,
+        average_relevance_score=round(avg_relevance, 4),
+        dominant_sentiment=dominant_sentiment(sentiment_counts),
     )
 
 
-@analytics_router.get("/trends", response_model=TrendsResponse)
-async def get_trends(
+@analytics_router.get("/charts", response_model=ChartsResponse)
+async def get_charts(
     workspace_id: str = Query(..., min_length=1, description="Workspace ID"),
-    days: int = Query(7, description="Time window in days (7 or 30)"),
     keyword_id: int | None = Query(None, description="Optional keyword ID filter"),
-) -> TrendsResponse:
-    """Return timeline counts for the last 7 or 30 days."""
+) -> ChartsResponse:
+    """Return chart-ready data for the dashboard."""
     async with async_session_maker() as session:
         try:
             await ensure_workspace(session, workspace_id)
             keyword = await resolve_keyword(session, workspace_id, keyword_id)
-            points = await get_timeline_counts(session, workspace_id, days, keyword)
+            sentiment_counts = await get_sentiment_counts(session, workspace_id, keyword)
+            platform_counts = await get_platform_counts(session, workspace_id, keyword)
+            emotion_counts = await get_top_emotions(session, workspace_id, keyword)
+            timeline = await get_timeline_14_days(session, workspace_id, keyword)
         except WorkspaceNotFoundError as exc:
             raise HTTPException(
                 status_code=404,
@@ -120,11 +107,20 @@ async def get_trends(
                 status_code=404,
                 detail="keyword_id not found for this workspace.",
             ) from exc
-        except InvalidDaysError as exc:
-            raise HTTPException(status_code=400, detail="days must be 7 or 30") from exc
 
-    return TrendsResponse(
+    sentiment_labels = ["positive", "negative", "neutral"]
+    sentiment_data = [sentiment_counts.get(k, 0) for k in sentiment_labels]
+    platform_labels = list(platform_counts.keys())
+    platform_data = [platform_counts[k] for k in platform_labels]
+    emotion_labels = [e for e, _ in emotion_counts]
+    emotion_data = [c for _, c in emotion_counts]
+    timeline_labels = [p["date"] for p in timeline]
+    timeline_data = [int(p["count"]) for p in timeline]
+
+    return ChartsResponse(
         workspace_id=workspace_id,
-        days=days,
-        points=[TrendPoint(**p) for p in points],
+        sentiment=ChartSeries(labels=sentiment_labels, data=sentiment_data),
+        timeline=ChartSeries(labels=timeline_labels, data=timeline_data),
+        platforms=ChartSeries(labels=platform_labels, data=platform_data),
+        emotions=ChartSeries(labels=emotion_labels, data=emotion_data),
     )

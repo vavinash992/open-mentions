@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,8 +45,18 @@ async def resolve_keyword(session: AsyncSession, workspace_id: str, keyword_id: 
     return keyword.keyword
 
 
+def _base_joined_query(workspace_id: str, keyword: str | None):
+    stmt = (
+        select(Mention, WorkspaceMention)
+        .join(WorkspaceMention, WorkspaceMention.mention_url == Mention.url)
+        .where(WorkspaceMention.workspace_id == workspace_id)
+    )
+    if keyword:
+        stmt = stmt.where(WorkspaceMention.keyword == keyword)
+    return stmt
+
+
 async def get_total_mentions(session: AsyncSession, workspace_id: str, keyword: str | None = None) -> int:
-    """Return total mentions for workspace (optionally filtered by keyword)."""
     stmt = select(func.count()).select_from(WorkspaceMention).where(WorkspaceMention.workspace_id == workspace_id)
     if keyword:
         stmt = stmt.where(WorkspaceMention.keyword == keyword)
@@ -54,8 +64,21 @@ async def get_total_mentions(session: AsyncSession, workspace_id: str, keyword: 
     return int(result.scalar() or 0)
 
 
-async def get_sentiment_stats(session: AsyncSession, workspace_id: str, keyword: str | None = None) -> dict[str, int]:
-    """Return sentiment counts for a workspace."""
+async def get_average_relevance(session: AsyncSession, workspace_id: str, keyword: str | None = None) -> float:
+    stmt = (
+        select(func.avg(Mention.relevance_score))
+        .select_from(WorkspaceMention)
+        .join(Mention, WorkspaceMention.mention_url == Mention.url)
+        .where(WorkspaceMention.workspace_id == workspace_id)
+    )
+    if keyword:
+        stmt = stmt.where(WorkspaceMention.keyword == keyword)
+    result = await session.execute(stmt)
+    value = result.scalar()
+    return float(value or 0.0)
+
+
+async def get_sentiment_counts(session: AsyncSession, workspace_id: str, keyword: str | None = None) -> dict[str, int]:
     stmt = (
         select(Mention.sentiment, func.count())
         .select_from(WorkspaceMention)
@@ -67,15 +90,16 @@ async def get_sentiment_stats(session: AsyncSession, workspace_id: str, keyword:
         stmt = stmt.where(WorkspaceMention.keyword == keyword)
     result = await session.execute(stmt)
     rows = result.all()
-    stats: dict[str, int] = {}
+    counts = {"positive": 0, "negative": 0, "neutral": 0}
     for sentiment, count in rows:
-        key = sentiment or "unknown"
-        stats[key] = int(count or 0)
-    return stats
+        key = (sentiment or "neutral").lower()
+        if key not in counts:
+            continue
+        counts[key] += int(count or 0)
+    return counts
 
 
-async def get_platform_stats(session: AsyncSession, workspace_id: str, keyword: str | None = None) -> dict[str, int]:
-    """Return platform counts for a workspace."""
+async def get_platform_counts(session: AsyncSession, workspace_id: str, keyword: str | None = None) -> dict[str, int]:
     stmt = (
         select(Mention.platform, func.count())
         .select_from(WorkspaceMention)
@@ -91,9 +115,8 @@ async def get_platform_stats(session: AsyncSession, workspace_id: str, keyword: 
 
 
 async def get_top_emotions(
-    session: AsyncSession, workspace_id: str, keyword: str | None = None, limit: int = 3
+    session: AsyncSession, workspace_id: str, keyword: str | None = None
 ) -> list[tuple[str, int]]:
-    """Return top emotions by count."""
     stmt = (
         select(Mention.emotion, func.count())
         .select_from(WorkspaceMention)
@@ -107,25 +130,24 @@ async def get_top_emotions(
     result = await session.execute(stmt)
     rows = result.all()
     emotions = [(emotion or "unknown", int(count or 0)) for emotion, count in rows]
-    return emotions[:limit]
+    return emotions[:5]
 
 
-async def get_timeline_counts(
-    session: AsyncSession, workspace_id: str, days: int, keyword: str | None = None
+async def get_timeline_14_days(
+    session: AsyncSession, workspace_id: str, keyword: str | None = None
 ) -> list[dict[str, int | str]]:
-    """Return mention counts per day for the last N days."""
-    if days not in {7, 30}:
-        raise InvalidDaysError
-
-    start_date = (datetime.now(timezone.utc) - timedelta(days=days - 1)).date()
+    days = 14
+    start_date = (datetime.utcnow() - timedelta(days=days - 1)).date()
+    start_dt = datetime.combine(start_date, datetime.min.time())
 
     stmt = (
-        select(func.date(WorkspaceMention.created_at), func.count())
+        select(func.strftime("%Y-%m-%d", Mention.created_at), func.count())
         .select_from(WorkspaceMention)
+        .join(Mention, WorkspaceMention.mention_url == Mention.url)
         .where(WorkspaceMention.workspace_id == workspace_id)
-        .where(WorkspaceMention.created_at >= start_date)
-        .group_by(func.date(WorkspaceMention.created_at))
-        .order_by(func.date(WorkspaceMention.created_at))
+        .where(Mention.created_at >= start_dt)
+        .group_by(func.strftime("%Y-%m-%d", Mention.created_at))
+        .order_by(func.strftime("%Y-%m-%d", Mention.created_at))
     )
     if keyword:
         stmt = stmt.where(WorkspaceMention.keyword == keyword)
@@ -134,9 +156,8 @@ async def get_timeline_counts(
     rows = result.all()
 
     counts_by_date: dict[date, int] = {}
-    for dt, count in rows:
-        if isinstance(dt, str):
-            dt = date.fromisoformat(dt)
+    for dt_str, count in rows:
+        dt = date.fromisoformat(dt_str)
         counts_by_date[dt] = int(count or 0)
 
     timeline: list[dict[str, int | str]] = []
@@ -145,3 +166,9 @@ async def get_timeline_counts(
         timeline.append({"date": day.isoformat(), "count": counts_by_date.get(day, 0)})
 
     return timeline
+
+
+def dominant_sentiment(sentiment_counts: dict[str, int]) -> str:
+    if not sentiment_counts:
+        return "neutral"
+    return max(sentiment_counts.items(), key=lambda x: x[1])[0]

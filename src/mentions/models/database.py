@@ -30,6 +30,10 @@ class Mention(SQLModel, table=True):
     """
 
     __tablename__ = "mentions"
+    __table_args__ = (
+        Index("ix_mentions_created_at", "created_at"),
+        Index("ix_mentions_sentiment", "sentiment"),
+    )
 
     url: str = Field(primary_key=True, description="The URL of the scraped item (global unique identifier)")
     platform: str = Field(..., description="The platform from which the item was scraped.")
@@ -108,6 +112,7 @@ class WorkspaceMention(SQLModel, table=True):
     __table_args__ = (
         Index("ix_workspace_mentions_workspace_id", "workspace_id"),
         Index("ix_workspace_mentions_workspace_keyword", "workspace_id", "keyword"),
+        Index("ix_workspace_mentions_created_at", "created_at"),
     )
 
     workspace_id: str = Field(
