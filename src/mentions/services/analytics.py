@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mentions.models.database import Mention, TrackedKeyword, Workspace, WorkspaceMention
@@ -179,3 +179,50 @@ def dominant_sentiment(sentiment_counts: dict[str, int]) -> str:
     if not sentiment_counts:
         return "neutral"
     return max(sentiment_counts.items(), key=lambda x: x[1])[0]
+
+
+async def get_share_of_voice(session: AsyncSession, workspace_id: str) -> dict[str, int]:
+    """
+    Count mentions grouped by keyword category (brand vs competitor).
+    """
+    stmt = (
+        select(TrackedKeyword.category, func.count())
+        .select_from(WorkspaceMention)
+        .join(
+            TrackedKeyword,
+            (TrackedKeyword.workspace_id == WorkspaceMention.workspace_id)
+            & (TrackedKeyword.keyword == WorkspaceMention.keyword),
+        )
+        .where(WorkspaceMention.workspace_id == workspace_id)
+        .group_by(TrackedKeyword.category)
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+    return {category or "brand": int(count or 0) for category, count in rows}
+
+
+async def get_sentiment_benchmark(session: AsyncSession, workspace_id: str) -> dict[str, float]:
+    """
+    Average sentiment score by keyword category (brand vs competitor).
+    Scores: positive=1, neutral=0, negative=-1.
+    """
+    sentiment_score = case(
+        (func.lower(Mention.sentiment) == "positive", 1),
+        (func.lower(Mention.sentiment) == "negative", -1),
+        else_=0,
+    )
+    stmt = (
+        select(TrackedKeyword.category, func.avg(sentiment_score))
+        .select_from(WorkspaceMention)
+        .join(Mention, WorkspaceMention.mention_url == Mention.url)
+        .join(
+            TrackedKeyword,
+            (TrackedKeyword.workspace_id == WorkspaceMention.workspace_id)
+            & (TrackedKeyword.keyword == WorkspaceMention.keyword),
+        )
+        .where(WorkspaceMention.workspace_id == workspace_id)
+        .group_by(TrackedKeyword.category)
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+    return {category or "brand": float(avg or 0.0) for category, avg in rows}

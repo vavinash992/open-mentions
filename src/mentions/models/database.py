@@ -147,6 +147,8 @@ class TrackedKeyword(SQLModel, table=True):
         description="Workspace that owns this keyword",
     )
     keyword: str = Field(..., description="The keyword/company name to track")
+    category: str = Field(default="brand", description="Keyword category: brand or competitor")
+    importance_score: int = Field(default=1, description="Priority weight for this keyword")
     is_active: bool = Field(default=True)
     last_searched_at: datetime | None = Field(default=None)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

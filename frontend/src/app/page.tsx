@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 
+import { Card, Metric, Text } from "@tremor/react";
+
 import { KeywordManager } from "@/components/KeywordManager";
 import { MentionsTable } from "@/components/MentionsTable";
 import { SentimentChart } from "@/components/SentimentChart";
@@ -36,6 +38,20 @@ type ChartsResponse = {
   emotions: ChartData;
 };
 
+type ComparisonResponse = {
+  share_of_voice: {
+    brand_count: number;
+    competitor_count: number;
+    total: number;
+    brand_percent: number;
+    competitor_percent: number;
+  };
+  sentiment_benchmark: {
+    brand_avg: number;
+    competitor_avg: number;
+  };
+};
+
 type HistoryResponse = {
   mentions: {
     keyword: string;
@@ -61,6 +77,9 @@ export default function Home() {
   const chartsKey = workspaceId
     ? `/api/v1/analytics/charts?workspace_id=${workspaceId}`
     : null;
+  const comparisonKey = workspaceId
+    ? `/api/v1/analytics/comparison?workspace_id=${workspaceId}`
+    : null;
   const historyKey = workspaceId
     ? `/api/v1/history?workspace_id=${workspaceId}&page=1&page_size=10`
     : null;
@@ -72,6 +91,9 @@ export default function Home() {
     refreshInterval: 30000,
   });
   const { data: charts } = useSWR<ChartsResponse>(chartsKey, fetcher, {
+    refreshInterval: 30000,
+  });
+  const { data: comparison } = useSWR<ComparisonResponse>(comparisonKey, fetcher, {
     refreshInterval: 30000,
   });
   const { data: history } = useSWR<HistoryResponse>(historyKey, fetcher, {
@@ -104,6 +126,11 @@ export default function Home() {
     }, 0);
     return labels[topIndex] ?? "N/A";
   }, [charts]);
+
+  const brandPercent = comparison?.share_of_voice?.brand_percent ?? 0;
+  const competitorPercent = comparison?.share_of_voice?.competitor_percent ?? 0;
+  const brandSentiment = comparison?.sentiment_benchmark?.brand_avg ?? 0;
+  const competitorSentiment = comparison?.sentiment_benchmark?.competitor_avg ?? 0;
 
   return (
     <div className="flex min-h-screen bg-slate-950">
@@ -151,11 +178,58 @@ export default function Home() {
           </div>
         </div>
 
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
+            <Text className="mb-2 text-slate-300">Share of Voice</Text>
+            <div className="flex items-end justify-between">
+              <div>
+                <Text className="text-xs text-slate-400">Brand</Text>
+                <Metric className="text-slate-100">{brandPercent.toFixed(1)}%</Metric>
+              </div>
+              <div className="text-right">
+                <Text className="text-xs text-slate-400">Competitors</Text>
+                <Metric className="text-slate-100">
+                  {competitorPercent.toFixed(1)}%
+                </Metric>
+              </div>
+            </div>
+            <div className="mt-4 h-2 w-full rounded-full bg-slate-900">
+              <div
+                className="h-2 rounded-full bg-emerald-500"
+                style={{ width: `${Math.min(100, Math.max(0, brandPercent))}%` }}
+              />
+            </div>
+            <div className="mt-2 text-xs text-slate-500">
+              {comparison?.share_of_voice?.brand_count ?? 0} brand vs{" "}
+              {comparison?.share_of_voice?.competitor_count ?? 0} competitor
+              mentions
+            </div>
+          </Card>
+          <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
+            <Text className="mb-2 text-slate-300">Sentiment Benchmark</Text>
+            <div className="flex items-end justify-between">
+              <div>
+                <Text className="text-xs text-slate-400">Brand Avg</Text>
+                <Metric className="text-slate-100">{brandSentiment.toFixed(2)}</Metric>
+              </div>
+              <div className="text-right">
+                <Text className="text-xs text-slate-400">Competitor Avg</Text>
+                <Metric className="text-slate-100">
+                  {competitorSentiment.toFixed(2)}
+                </Metric>
+              </div>
+            </div>
+            <div className="mt-3 text-xs text-slate-500">
+              Scores: positive = 1, neutral = 0, negative = -1
+            </div>
+          </Card>
+        </div>
+
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2" id="mentions">
             <MentionsTable mentions={history?.mentions ?? []} />
           </div>
-          <div className="lg:col-span-1">
+          <div className="lg:col-span-1" id="keywords">
             {workspaceId ? (
               <KeywordManager workspaceId={workspaceId} />
             ) : (

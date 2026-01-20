@@ -13,7 +13,9 @@ from mentions.services.analytics import (
     ensure_workspace,
     get_average_relevance,
     get_platform_counts,
+    get_sentiment_benchmark,
     get_sentiment_counts,
+    get_share_of_voice,
     get_timeline_14_days,
     get_top_emotions,
     get_top_platform,
@@ -63,6 +65,31 @@ class ChartsResponse(BaseModel):
     timeline: ChartData = Field(..., description="Mentions per day (last 14 days)")
     platforms: ChartData = Field(..., description="Platform distribution")
     emotions: ChartData = Field(..., description="Top emotions")
+
+
+class ShareOfVoiceResponse(BaseModel):
+    """Share of voice breakdown for brand vs competitor."""
+
+    brand_count: int = Field(..., description="Total brand mentions")
+    competitor_count: int = Field(..., description="Total competitor mentions")
+    total: int = Field(..., description="Total mentions across both categories")
+    brand_percent: float = Field(..., description="Brand share of voice percentage")
+    competitor_percent: float = Field(..., description="Competitor share of voice percentage")
+
+
+class SentimentBenchmarkResponse(BaseModel):
+    """Average sentiment score by category."""
+
+    brand_avg: float = Field(..., description="Average sentiment score for brand keywords")
+    competitor_avg: float = Field(..., description="Average sentiment score for competitor keywords")
+
+
+class ComparisonResponse(BaseModel):
+    """Comparison analytics response."""
+
+    workspace_id: str = Field(..., description="Workspace ID")
+    share_of_voice: ShareOfVoiceResponse = Field(..., description="Share of voice metrics")
+    sentiment_benchmark: SentimentBenchmarkResponse = Field(..., description="Sentiment benchmarking metrics")
 
 
 @analytics_router.get("/summary", response_model=SummaryResponse)
@@ -166,5 +193,47 @@ async def get_charts(
         emotions=ChartData(
             labels=[emotion for emotion, _ in top_emotions],
             data=[count for _, count in top_emotions],
+        ),
+    )
+
+
+@analytics_router.get("/comparison", response_model=ComparisonResponse)
+async def get_comparison(
+    workspace_id: str = Query(..., min_length=1, description="Workspace ID"),
+) -> ComparisonResponse:
+    """Return share-of-voice and sentiment benchmarking for brand vs competitor keywords."""
+    async with async_session_maker() as session:
+        try:
+            await ensure_workspace(session, workspace_id)
+            sov_counts = await get_share_of_voice(session, workspace_id)
+            sentiment_avgs = await get_sentiment_benchmark(session, workspace_id)
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Workspace not found. Create one via GET /api/v1/workspace/new.",
+            ) from exc
+
+    brand_count = sov_counts.get("brand", 0)
+    competitor_count = sov_counts.get("competitor", 0)
+    total = brand_count + competitor_count
+    if total > 0:
+        brand_percent = round((brand_count / total) * 100, 2)
+        competitor_percent = round((competitor_count / total) * 100, 2)
+    else:
+        brand_percent = 0.0
+        competitor_percent = 0.0
+
+    return ComparisonResponse(
+        workspace_id=workspace_id,
+        share_of_voice=ShareOfVoiceResponse(
+            brand_count=brand_count,
+            competitor_count=competitor_count,
+            total=total,
+            brand_percent=brand_percent,
+            competitor_percent=competitor_percent,
+        ),
+        sentiment_benchmark=SentimentBenchmarkResponse(
+            brand_avg=round(sentiment_avgs.get("brand", 0.0), 3),
+            competitor_avg=round(sentiment_avgs.get("competitor", 0.0), 3),
         ),
     )

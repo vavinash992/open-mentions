@@ -20,6 +20,15 @@ class KeywordCreateRequest(BaseModel):
     """Request model for creating a new tracked keyword."""
 
     keyword: str = Field(..., min_length=1, max_length=100, description="The keyword to track")
+    category: str = Field(
+        default="brand",
+        description="Keyword category (e.g., brand or competitor)",
+    )
+    importance_score: int = Field(
+        default=1,
+        ge=1,
+        description="Priority weight for this keyword",
+    )
 
 
 class KeywordResponse(BaseModel):
@@ -27,6 +36,8 @@ class KeywordResponse(BaseModel):
 
     id: int = Field(..., description="Unique identifier")
     keyword: str = Field(..., description="The tracked keyword")
+    category: str = Field(..., description="Keyword category")
+    importance_score: int = Field(..., description="Priority weight for this keyword")
     is_active: bool = Field(..., description="Whether the keyword is active")
     last_searched_at: Optional[str] = Field(None, description="Last search timestamp")
     created_at: str = Field(..., description="Creation timestamp")
@@ -113,6 +124,8 @@ async def create_keyword(
                 )
             # Reactivate existing keyword
             existing_keyword.is_active = True
+            existing_keyword.category = request.category
+            existing_keyword.importance_score = request.importance_score
             session.add(existing_keyword)
             await session.commit()
             await session.refresh(existing_keyword)
@@ -120,6 +133,8 @@ async def create_keyword(
             return KeywordResponse(
                 id=existing_keyword.id,
                 keyword=existing_keyword.keyword,
+                category=existing_keyword.category,
+                importance_score=existing_keyword.importance_score,
                 is_active=existing_keyword.is_active,
                 last_searched_at=existing_keyword.last_searched_at.isoformat()
                 if existing_keyword.last_searched_at
@@ -131,6 +146,8 @@ async def create_keyword(
         new_keyword = TrackedKeyword(
             workspace_id=workspace_id,
             keyword=request.keyword,
+            category=request.category,
+            importance_score=request.importance_score,
             is_active=True,
         )
         session.add(new_keyword)
@@ -142,6 +159,8 @@ async def create_keyword(
         return KeywordResponse(
             id=new_keyword.id,
             keyword=new_keyword.keyword,
+            category=new_keyword.category,
+            importance_score=new_keyword.importance_score,
             is_active=new_keyword.is_active,
             last_searched_at=None,
             created_at=new_keyword.created_at.isoformat(),
@@ -186,6 +205,8 @@ async def list_keywords(
                 KeywordResponse(
                     id=k.id,
                     keyword=k.keyword,
+                    category=k.category,
+                    importance_score=k.importance_score,
                     is_active=k.is_active,
                     last_searched_at=k.last_searched_at.isoformat() if k.last_searched_at else None,
                     created_at=k.created_at.isoformat(),
