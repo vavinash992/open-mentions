@@ -114,6 +114,13 @@ async def get_platform_counts(session: AsyncSession, workspace_id: str, keyword:
     return {platform or "unknown": int(count or 0) for platform, count in rows}
 
 
+async def get_top_platform(session: AsyncSession, workspace_id: str, keyword: str | None = None) -> str:
+    counts = await get_platform_counts(session, workspace_id, keyword)
+    if not counts:
+        return "unknown"
+    return max(counts.items(), key=lambda item: item[1])[0]
+
+
 async def get_top_emotions(
     session: AsyncSession, workspace_id: str, keyword: str | None = None
 ) -> list[tuple[str, int]]:
