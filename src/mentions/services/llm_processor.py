@@ -54,7 +54,7 @@ class LLMProcessor:
         api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
         endpoint = endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
         deployment_name = deployment_name or os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o-mini")
-        api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
+        api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01")
 
         if not api_key:
             msg = "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable."
@@ -71,8 +71,7 @@ class LLMProcessor:
         )
 
         # Wrap client with instructor for structured outputs
-        # Use patch() to enable structured outputs on the Azure client
-        self.instructor_client = instructor.patch(azure_client)
+        self.instructor_client = instructor.from_openai(azure_client)
 
         self.deployment_name = deployment_name
         self.api_version = api_version

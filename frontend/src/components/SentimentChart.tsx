@@ -2,15 +2,28 @@
 
 import { Card, DonutChart, Text } from "@tremor/react";
 
-type SentimentChartProps = {
-  sentimentBreakdown: Record<string, number>;
+type ChartData = {
+  labels: string[];
+  data: number[];
 };
 
-export function SentimentChart({ sentimentBreakdown }: SentimentChartProps) {
+type SentimentChartProps = {
+  sentimentData?: ChartData;
+};
+
+export function SentimentChart({ sentimentData }: SentimentChartProps) {
+  const counts = (sentimentData?.labels ?? []).reduce<Record<string, number>>(
+    (acc, label, idx) => {
+      acc[label.toLowerCase()] = sentimentData?.data?.[idx] ?? 0;
+      return acc;
+    },
+    {},
+  );
+
   const data = [
-    { name: "positive", value: sentimentBreakdown.positive ?? 0 },
-    { name: "negative", value: sentimentBreakdown.negative ?? 0 },
-    { name: "neutral", value: sentimentBreakdown.neutral ?? 0 },
+    { name: "positive", value: counts.positive ?? 0 },
+    { name: "negative", value: counts.negative ?? 0 },
+    { name: "neutral", value: counts.neutral ?? 0 },
   ];
 
   return (

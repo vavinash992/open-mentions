@@ -14,14 +14,26 @@ import { useWorkspace } from "@/hooks/useWorkspace";
 
 type SummaryResponse = {
   total_mentions: number;
-  sentiment_breakdown: Record<string, number>;
-  top_emotions: { emotion: string; count: number }[];
-  platform_stats: Record<string, number>;
+  average_relevance_score: number;
+  dominant_sentiment: string;
+  top_platform: string | null;
 };
 
 type TrendsResponse = {
   days: number;
   points: { date: string; count: number }[];
+};
+
+type ChartData = {
+  labels: string[];
+  data: number[];
+};
+
+type ChartsResponse = {
+  sentiment: ChartData;
+  timeline: ChartData;
+  platforms: ChartData;
+  emotions: ChartData;
 };
 
 type HistoryResponse = {
@@ -46,6 +58,9 @@ export default function Home() {
   const trendsKey = workspaceId
     ? `/api/v1/analytics/trends?workspace_id=${workspaceId}&days=${days}`
     : null;
+  const chartsKey = workspaceId
+    ? `/api/v1/analytics/charts?workspace_id=${workspaceId}`
+    : null;
   const historyKey = workspaceId
     ? `/api/v1/history?workspace_id=${workspaceId}&page=1&page_size=10`
     : null;
@@ -56,23 +71,39 @@ export default function Home() {
   const { data: trends } = useSWR<TrendsResponse>(trendsKey, fetcher, {
     refreshInterval: 30000,
   });
+  const { data: charts } = useSWR<ChartsResponse>(chartsKey, fetcher, {
+    refreshInterval: 30000,
+  });
   const { data: history } = useSWR<HistoryResponse>(historyKey, fetcher, {
     refreshInterval: 30000,
   });
 
   const sentimentIndex = useMemo(() => {
-    if (!summary?.sentiment_breakdown) return 0;
-    const pos = summary.sentiment_breakdown.positive ?? 0;
-    const neg = summary.sentiment_breakdown.negative ?? 0;
-    return Math.round(pos - neg);
-  }, [summary]);
+    const labels = charts?.sentiment?.labels ?? [];
+    const data = charts?.sentiment?.data ?? [];
+    const counts = labels.reduce<Record<string, number>>((acc, label, idx) => {
+      acc[label.toLowerCase()] = data[idx] ?? 0;
+      return acc;
+    }, {});
+    const pos = counts.positive ?? 0;
+    const neg = counts.negative ?? 0;
+    const total = data.reduce((sum, value) => sum + (value ?? 0), 0);
+    if (total === 0) return 0;
+    return Math.round(((pos - neg) / total) * 100);
+  }, [charts]);
 
   const topPlatform = useMemo(() => {
-    const stats = summary?.platform_stats ?? {};
-    const entries = Object.entries(stats);
-    if (entries.length === 0) return "N/A";
-    return entries.sort((a, b) => b[1] - a[1])[0][0];
-  }, [summary]);
+    const labels = charts?.platforms?.labels ?? [];
+    const data = charts?.platforms?.data ?? [];
+    if (labels.length === 0) return "N/A";
+    const topIndex = data.reduce((bestIdx, value, idx) => {
+      if ((value ?? 0) > (data[bestIdx] ?? 0)) {
+        return idx;
+      }
+      return bestIdx;
+    }, 0);
+    return labels[topIndex] ?? "N/A";
+  }, [charts]);
 
   return (
     <div className="flex min-h-screen bg-slate-950">
@@ -113,7 +144,7 @@ export default function Home() {
 
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-1">
-            <SentimentChart sentimentBreakdown={summary?.sentiment_breakdown ?? {}} />
+            <SentimentChart sentimentData={charts?.sentiment} />
           </div>
           <div className="lg:col-span-2">
             <TrendsChart points={trends?.points ?? []} days={days} />
@@ -135,13 +166,13 @@ export default function Home() {
             <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
               <div className="text-sm text-slate-300">Top Emotions</div>
               <ul className="mt-3 space-y-2 text-sm text-slate-200">
-                {summary?.top_emotions?.map((emotion) => (
-                  <li key={emotion.emotion} className="flex justify-between">
-                    <span>{emotion.emotion}</span>
-                    <span className="text-slate-400">{emotion.count}</span>
+                {(charts?.emotions?.labels ?? []).map((label, idx) => (
+                  <li key={label} className="flex justify-between">
+                    <span>{label}</span>
+                    <span className="text-slate-400">{charts?.emotions?.data?.[idx] ?? 0}</span>
                   </li>
                 ))}
-                {(summary?.top_emotions?.length ?? 0) === 0 && (
+                {(charts?.emotions?.labels?.length ?? 0) === 0 && (
                   <li className="text-slate-500">No data yet.</li>
                 )}
               </ul>

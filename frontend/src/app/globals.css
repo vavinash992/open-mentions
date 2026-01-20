@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "@tremor/react/dist/esm/tremor.css";
 
 :root {
   --background: #ffffff;

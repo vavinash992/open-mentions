@@ -30,10 +30,6 @@ class Mention(SQLModel, table=True):
     """
 
     __tablename__ = "mentions"
-    __table_args__ = (
-        Index("ix_mentions_created_at", "created_at"),
-        Index("ix_mentions_sentiment", "sentiment"),
-    )
 
     url: str = Field(primary_key=True, description="The URL of the scraped item (global unique identifier)")
     platform: str = Field(..., description="The platform from which the item was scraped.")
@@ -48,11 +44,11 @@ class Mention(SQLModel, table=True):
     # LLM Classification fields (global)
     relevance_score: float | None = Field(None, ge=0.0, le=1.0)
     is_relevant: bool | None = Field(None)
-    sentiment: str | None = Field(None)
+    sentiment: str | None = Field(None, index=True)
     emotion: str | None = Field(None)
     summary: str | None = Field(None, max_length=150)
 
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 
     @classmethod
     def from_scraped_item(cls, item: ScrapedItem) -> Mention:  # noqa: F821
