@@ -30,6 +30,10 @@ class ClassificationResult(BaseModel):
         description="Primary emotion: 'frustration', 'joy', 'curiosity', 'disappointment', 'anger', 'neutral', 'excitement', 'concern', 'satisfaction', 'confusion'",
     )
     summary: str = Field(..., max_length=150, description="Concise one-sentence summary (max 150 characters)")
+    themes: list[str] = Field(
+        ...,
+        description="List of 1-3 key topics or themes discussed (e.g., 'pricing', 'ui', 'performance', 'feature-request').",
+    )
 
 
 class LLMProcessor:
@@ -130,6 +134,7 @@ class LLMProcessor:
                 sentiment="neutral",
                 emotion="neutral",
                 summary=f"Classification error: {str(e)[:150]}",
+                themes=[],
             )
         return result
 
@@ -198,6 +203,7 @@ class LLMProcessor:
                 item.sentiment = classification.sentiment
                 item.emotion = classification.emotion
                 item.summary = classification.summary
+                item.themes = classification.themes
 
         logger.info(f"Processed {processed_count} mentions successfully, {error_count} errors for {company_name}")
 
@@ -211,6 +217,7 @@ class LLMProcessor:
 2. Classify sentiment (positive, negative, neutral)
 3. Identify primary emotions expressed
 4. Generate concise, objective summaries
+5. Identify 1-3 concise themes/topics discussed in the mention
 
 Guidelines:
 - Be precise in relevance scoring (0.0 = not relevant, 1.0 = highly relevant)
@@ -235,4 +242,5 @@ Extract the following information:
 2. is_relevant: Boolean - is this mention actually about "{company_name}" or their products/services?
 3. sentiment: Overall sentiment toward the company (positive, negative, neutral)
 4. emotion: Primary emotion expressed in the text (choose from: frustration, joy, curiosity, disappointment, anger, neutral, excitement, concern, satisfaction, confusion)
-5. summary: A concise, objective ONE-SENTENCE summary (max 150 characters) of what the mention discusses. Ignore gibberish, filler words, and repetitive phrases. Extract the core message."""
+5. summary: A concise, objective ONE-SENTENCE summary (max 150 characters) of what the mention discusses. Ignore gibberish, filler words, and repetitive phrases. Extract the core message.
+6. themes: List 1-3 themes, lowercase and hyphenated (e.g., pricing, ui, feature-request, performance)."""

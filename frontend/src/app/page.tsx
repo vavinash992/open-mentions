@@ -13,7 +13,7 @@ import { SentimentChart } from "@/components/SentimentChart";
 import { Sidebar } from "@/components/Sidebar";
 import { StatCards } from "@/components/StatCards";
 import { TrendsChart } from "@/components/TrendsChart";
-import { fetcher } from "@/lib/api";
+import { api, fetcher } from "@/lib/api";
 import { useWorkspace } from "@/hooks/useWorkspace";
 
 type SummaryResponse = {
@@ -74,6 +74,7 @@ type HistoryResponse = {
     sentiment?: string | null;
     emotion?: string | null;
     summary?: string | null;
+    themes?: string[] | null;
   }[];
 };
 
@@ -190,33 +191,78 @@ export default function Home() {
     return items.map((item) => item.name);
   }, [comparison]);
 
+  const topicCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    (history?.mentions ?? []).forEach((mention) => {
+      (mention.themes ?? []).forEach((theme) => {
+        const key = theme.trim().toLowerCase();
+        if (!key) return;
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      });
+    });
+    return Array.from(counts.entries())
+      .map(([theme, count]) => ({ theme, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 12);
+  }, [history]);
+
   const runComparison = async () => {
     if (!workspaceId) return;
     setCompareError(null);
     setIsComparing(true);
     const postKeyword = async (keyword: string, category: "brand" | "competitor") => {
       const value = keyword.trim();
-      if (!value) return;
+      if (!value) {
+        return { ok: false, message: "Missing keyword value." };
+      }
       try {
         await api.post(
           "/api/v1/keywords",
           { keyword: value, category },
-          { headers: { "X-Workspace-ID": workspaceId } }
+          { headers: { "X-Workspace-ID": workspaceId }, timeout: 60000 }
         );
+        return { ok: true };
       } catch (error) {
         if (isAxiosError(error) && error.response?.status === 409) {
-          return;
+          return { ok: true, message: "Keyword already exists." };
+        }
+        if (isAxiosError(error) && error.code === "ECONNABORTED") {
+          return {
+            ok: false,
+            message: `Keyword "${value}" timed out. Please try again in a moment.`,
+          };
         }
         throw error;
       }
     };
 
     try {
-      await Promise.all([
+      const results = await Promise.all([
         postKeyword(brandInput, "brand"),
         postKeyword(competitorInput, "competitor"),
       ]);
-      await api.post(`/api/v1/monitor/trigger?workspace_id=${workspaceId}`);
+      const errors = results
+        .filter((result) => result && !result.ok && result.message)
+        .map((result) => result?.message);
+      if (errors.length > 0) {
+        setCompareError(errors.join(" "));
+      }
+      let rateLimited = false;
+      let rateLimitMessage: string | null = null;
+      try {
+        await api.post(`/api/v1/monitor/trigger?workspace_id=${workspaceId}`, null, {
+          timeout: 60000,
+        });
+      } catch (error) {
+        if (isAxiosError(error) && error.response?.status === 429) {
+          rateLimited = true;
+          const detail = error.response?.data?.detail;
+          rateLimitMessage =
+            typeof detail === "string" ? detail : detail?.message ?? null;
+        } else {
+          throw error;
+        }
+      }
       await Promise.all([
         mutateSummary(),
         mutateTrends(),
@@ -225,6 +271,9 @@ export default function Home() {
         mutateReach(),
         mutateHistory(),
       ]);
+      if (rateLimited) {
+        setCompareError(rateLimitMessage ?? "Rate limit hit. Try again later.");
+      }
     } catch (error) {
       console.error("Compare failed", error);
       setCompareError("Compare failed. Please try again.");
@@ -386,7 +435,7 @@ export default function Home() {
                     <td className="px-2 py-2">
                       <a
                         href={item.url}
-                        target="_blank"
+            target="_blank"
                         rel="noreferrer"
                         className="text-emerald-400 hover:underline"
                       >
@@ -422,6 +471,23 @@ export default function Home() {
                 Loading workspace...
               </div>
             )}
+            <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
+              <div className="text-sm text-slate-300">Topic Cloud</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {topicCounts.map((topic) => (
+                  <span
+                    key={topic.theme}
+                    className="rounded-full border border-slate-800 bg-slate-900 px-2 py-1 text-xs text-slate-200"
+                  >
+                    {topic.theme}
+                    <span className="ml-2 text-slate-400">{topic.count}</span>
+                  </span>
+                ))}
+                {topicCounts.length === 0 && (
+                  <span className="text-xs text-slate-500">No themes yet.</span>
+                )}
+              </div>
+            </div>
             <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
               <div className="text-sm text-slate-300">Top Emotions</div>
               <ul className="mt-3 space-y-2 text-sm text-slate-200">

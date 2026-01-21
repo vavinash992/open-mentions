@@ -50,6 +50,10 @@ class ScrapedItem(BaseModel):
         max_length=150,
         description="Concise one-sentence summary of what the mention is about (max 150 characters).",
     )
+    themes: list[str] = Field(
+        default_factory=list,
+        description="List of 1-3 key topics or themes discussed (lowercase, hyphenated).",
+    )
 
 
 class BaseScraper(ABC):

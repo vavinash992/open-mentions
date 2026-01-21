@@ -47,11 +47,13 @@ class Mention(SQLModel, table=True):
     sentiment: str | None = Field(None, index=True)
     emotion: str | None = Field(None)
     summary: str | None = Field(None, max_length=150)
+    themes: str | None = Field(None, description="Comma-separated list of themes")
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 
     @classmethod
     def from_scraped_item(cls, item: ScrapedItem) -> Mention:  # noqa: F821
+        themes = [theme.strip() for theme in (item.themes or []) if theme and theme.strip()]
         return cls(
             url=item.url,
             platform=item.platform,
@@ -67,6 +69,7 @@ class Mention(SQLModel, table=True):
             sentiment=item.sentiment,
             emotion=item.emotion,
             summary=item.summary,
+            themes=", ".join(themes) if themes else None,
         )
 
     def to_scraped_item(self, *, keyword: str) -> ScrapedItem:  # noqa: F821
@@ -94,6 +97,7 @@ class Mention(SQLModel, table=True):
             sentiment=self.sentiment,
             emotion=self.emotion,
             summary=self.summary,
+            themes=[theme.strip() for theme in (self.themes or "").split(",") if theme.strip()],
         )
 
 
