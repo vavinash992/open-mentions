@@ -69,29 +69,20 @@ class ChartsResponse(BaseModel):
     emotions: ChartData = Field(..., description="Top emotions")
 
 
-class ShareOfVoiceStat(BaseModel):
-    """Share of voice per keyword."""
+class BrandBenchmarkStat(BaseModel):
+    """Keyword-level benchmark stats."""
 
-    keyword: str = Field(..., description="Tracked keyword")
-    category: str = Field(..., description="Keyword category")
+    name: str = Field(..., description="Keyword name")
     count: int = Field(..., description="Mention count for this keyword")
-    percent: float = Field(..., description="Share of voice percentage")
-
-
-class SentimentBenchmarkStat(BaseModel):
-    """Average sentiment score per keyword."""
-
-    keyword: str = Field(..., description="Tracked keyword")
-    category: str = Field(..., description="Keyword category")
-    average_sentiment: float = Field(..., description="Average sentiment score")
+    sentiment_avg: float = Field(..., description="Average sentiment score")
 
 
 class ComparisonResponse(BaseModel):
     """Comparison analytics response."""
 
     workspace_id: str = Field(..., description="Workspace ID")
-    share_of_voice: list[ShareOfVoiceStat] = Field(..., description="Share of voice metrics")
-    sentiment_benchmark: list[SentimentBenchmarkStat] = Field(..., description="Sentiment benchmarking metrics")
+    share_of_voice: list[BrandBenchmarkStat] = Field(..., description="Share of voice metrics")
+    sentiment_benchmark: list[BrandBenchmarkStat] = Field(..., description="Sentiment benchmarking metrics")
     trends: list[dict[str, int | str]] = Field(..., description="Daily counts by keyword")
 
 
@@ -235,39 +226,21 @@ async def get_comparison(
                 detail="Workspace not found. Create one via GET /api/v1/workspace/new.",
             ) from exc
 
-    total = sum(item["count"] for item in sov_counts) if sov_counts else 0
-    if total > 0:
-        sov_items = [
-            ShareOfVoiceStat(
-                keyword=item["keyword"],
-                category=item["category"],
-                count=item["count"],
-                percent=round((item["count"] / total) * 100, 2),
-            )
-            for item in sov_counts
-        ]
-    else:
-        sov_items = [
-            ShareOfVoiceStat(
-                keyword=item["keyword"],
-                category=item["category"],
-                count=item["count"],
-                percent=0.0,
-            )
-            for item in sov_counts
-        ]
+    sentiment_by_keyword = {item["keyword"]: item["average_sentiment"] for item in sentiment_avgs}
+    keywords = {item["keyword"] for item in sov_counts} | set(sentiment_by_keyword.keys())
+    benchmark_items = [
+        BrandBenchmarkStat(
+            name=keyword,
+            count=next((item["count"] for item in sov_counts if item["keyword"] == keyword), 0),
+            sentiment_avg=round(sentiment_by_keyword.get(keyword, 0.0), 3),
+        )
+        for keyword in sorted(keywords)
+    ]
 
     return ComparisonResponse(
         workspace_id=workspace_id,
-        share_of_voice=sov_items,
-        sentiment_benchmark=[
-            SentimentBenchmarkStat(
-                keyword=item["keyword"],
-                category=item["category"],
-                average_sentiment=round(item["average_sentiment"], 3),
-            )
-            for item in sentiment_avgs
-        ],
+        share_of_voice=benchmark_items,
+        sentiment_benchmark=benchmark_items,
         trends=trends,
     )
 

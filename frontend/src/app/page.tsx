@@ -3,6 +3,8 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 
+import { isAxiosError } from "axios";
+
 import { Card, Metric, Text } from "@tremor/react";
 
 import { KeywordManager } from "@/components/KeywordManager";
@@ -40,15 +42,14 @@ type ChartsResponse = {
 
 type ComparisonResponse = {
   share_of_voice: {
-    keyword: string;
-    category: string;
+    name: string;
     count: number;
-    percent: number;
+    sentiment_avg: number;
   }[];
   sentiment_benchmark: {
-    keyword: string;
-    category: string;
-    average_sentiment: number;
+    name: string;
+    count: number;
+    sentiment_avg: number;
   }[];
   trends: Array<Record<string, number | string>>;
 };
@@ -79,6 +80,10 @@ type HistoryResponse = {
 export default function Home() {
   const { workspaceId, loading } = useWorkspace();
   const [days, setDays] = useState(7);
+  const [brandInput, setBrandInput] = useState("");
+  const [competitorInput, setCompetitorInput] = useState("");
+  const [isComparing, setIsComparing] = useState(false);
+  const [compareError, setCompareError] = useState<string | null>(null);
 
   const summaryKey = workspaceId
     ? `/api/v1/analytics/summary?workspace_id=${workspaceId}`
@@ -99,24 +104,48 @@ export default function Home() {
     ? `/api/v1/history?workspace_id=${workspaceId}&page=1&page_size=10`
     : null;
 
-  const { data: summary } = useSWR<SummaryResponse>(summaryKey, fetcher, {
-    refreshInterval: 30000,
-  });
-  const { data: trends } = useSWR<TrendsResponse>(trendsKey, fetcher, {
-    refreshInterval: 30000,
-  });
-  const { data: charts } = useSWR<ChartsResponse>(chartsKey, fetcher, {
-    refreshInterval: 30000,
-  });
-  const { data: comparison } = useSWR<ComparisonResponse>(comparisonKey, fetcher, {
-    refreshInterval: 30000,
-  });
-  const { data: reach } = useSWR<ReachResponse>(reachKey, fetcher, {
-    refreshInterval: 30000,
-  });
-  const { data: history } = useSWR<HistoryResponse>(historyKey, fetcher, {
-    refreshInterval: 30000,
-  });
+  const { data: summary, mutate: mutateSummary } = useSWR<SummaryResponse>(
+    summaryKey,
+    fetcher,
+    {
+      refreshInterval: 30000,
+    }
+  );
+  const { data: trends, mutate: mutateTrends } = useSWR<TrendsResponse>(
+    trendsKey,
+    fetcher,
+    {
+      refreshInterval: 30000,
+    }
+  );
+  const { data: charts, mutate: mutateCharts } = useSWR<ChartsResponse>(
+    chartsKey,
+    fetcher,
+    {
+      refreshInterval: 30000,
+    }
+  );
+  const { data: comparison, mutate: mutateComparison } = useSWR<ComparisonResponse>(
+    comparisonKey,
+    fetcher,
+    {
+      refreshInterval: 30000,
+    }
+  );
+  const { data: reach, mutate: mutateReach } = useSWR<ReachResponse>(
+    reachKey,
+    fetcher,
+    {
+      refreshInterval: 30000,
+    }
+  );
+  const { data: history, mutate: mutateHistory } = useSWR<HistoryResponse>(
+    historyKey,
+    fetcher,
+    {
+      refreshInterval: 30000,
+    }
+  );
 
   const sentimentIndex = useMemo(() => {
     const labels = charts?.sentiment?.labels ?? [];
@@ -145,23 +174,64 @@ export default function Home() {
     return labels[topIndex] ?? "N/A";
   }, [charts]);
 
-  const sentimentByKeyword = useMemo(() => {
-    const map = new Map<string, number>();
-    (comparison?.sentiment_benchmark ?? []).forEach((item) => {
-      map.set(item.keyword, item.average_sentiment);
-    });
-    return map;
-  }, [comparison]);
-
   const leaderboard = useMemo(() => {
     const items = comparison?.share_of_voice ?? [];
-    return [...items].sort((a, b) => b.percent - a.percent);
+    const total = items.reduce((sum, item) => sum + item.count, 0);
+    return [...items]
+      .map((item) => ({
+        ...item,
+        percent: total > 0 ? (item.count / total) * 100 : 0,
+      }))
+      .sort((a, b) => b.percent - a.percent);
   }, [comparison]);
 
   const trendSeries = useMemo(() => {
     const items = comparison?.share_of_voice ?? [];
-    return items.map((item) => item.keyword);
+    return items.map((item) => item.name);
   }, [comparison]);
+
+  const runComparison = async () => {
+    if (!workspaceId) return;
+    setCompareError(null);
+    setIsComparing(true);
+    const postKeyword = async (keyword: string, category: "brand" | "competitor") => {
+      const value = keyword.trim();
+      if (!value) return;
+      try {
+        await api.post(
+          "/api/v1/keywords",
+          { keyword: value, category },
+          { headers: { "X-Workspace-ID": workspaceId } }
+        );
+      } catch (error) {
+        if (isAxiosError(error) && error.response?.status === 409) {
+          return;
+        }
+        throw error;
+      }
+    };
+
+    try {
+      await Promise.all([
+        postKeyword(brandInput, "brand"),
+        postKeyword(competitorInput, "competitor"),
+      ]);
+      await api.post(`/api/v1/monitor/trigger?workspace_id=${workspaceId}`);
+      await Promise.all([
+        mutateSummary(),
+        mutateTrends(),
+        mutateCharts(),
+        mutateComparison(),
+        mutateReach(),
+        mutateHistory(),
+      ]);
+    } catch (error) {
+      console.error("Compare failed", error);
+      setCompareError("Compare failed. Please try again.");
+    } finally {
+      setIsComparing(false);
+    }
+  };
 
   return (
     <div className="flex min-h-screen bg-slate-950">
@@ -200,6 +270,39 @@ export default function Home() {
           topPlatform={topPlatform}
         />
 
+        <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <Text className="text-slate-300">Benchmarking</Text>
+              <Text className="text-xs text-slate-500">
+                Compare two brands with one click.
+              </Text>
+            </div>
+            {compareError && <Text className="text-xs text-rose-400">{compareError}</Text>}
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <input
+              value={brandInput}
+              onChange={(event) => setBrandInput(event.target.value)}
+              placeholder="My Brand"
+              className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
+            />
+            <input
+              value={competitorInput}
+              onChange={(event) => setCompetitorInput(event.target.value)}
+              placeholder="Competitor"
+              className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400"
+            />
+            <button
+              onClick={runComparison}
+              disabled={isComparing || !brandInput.trim() || !competitorInput.trim()}
+              className="rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-700"
+            >
+              {isComparing ? "Comparing..." : "Compare"}
+            </button>
+          </div>
+        </Card>
+
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-1">
             <SentimentChart sentimentData={charts?.sentiment} />
@@ -232,22 +335,11 @@ export default function Home() {
               </thead>
               <tbody>
                 {leaderboard.map((item, index) => (
-                  <tr key={item.keyword} className="border-b border-slate-900 text-slate-200">
+                  <tr key={item.name} className="border-b border-slate-900 text-slate-200">
                     <td className="px-2 py-2 text-slate-300">{index + 1}</td>
-                    <td className="px-2 py-2 text-slate-300">{item.keyword}</td>
-                    <td className="px-2 py-2">
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
-                          item.category === "competitor"
-                            ? "bg-rose-900/40 text-rose-300"
-                            : "bg-emerald-900/40 text-emerald-300"
-                        }`}
-                      >
-                        {item.category}
-                      </span>
-                    </td>
+                    <td className="px-2 py-2 text-slate-300">{item.name}</td>
                     <td className="px-2 py-2 text-slate-300">
-                      {(sentimentByKeyword.get(item.keyword) ?? 0).toFixed(2)}
+                      {item.sentiment_avg.toFixed(2)}
                     </td>
                     <td className="px-2 py-2 text-slate-300">{item.percent.toFixed(2)}%</td>
                     <td className="px-2 py-2 text-slate-300">{item.count}</td>
