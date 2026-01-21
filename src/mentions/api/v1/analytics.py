@@ -12,6 +12,7 @@ from mentions.services.analytics import (
     dominant_sentiment,
     ensure_workspace,
     get_average_relevance,
+    get_comparison_trends,
     get_platform_counts,
     get_reach_analytics,
     get_sentiment_benchmark,
@@ -68,29 +69,30 @@ class ChartsResponse(BaseModel):
     emotions: ChartData = Field(..., description="Top emotions")
 
 
-class ShareOfVoiceResponse(BaseModel):
-    """Share of voice breakdown for brand vs competitor."""
+class ShareOfVoiceStat(BaseModel):
+    """Share of voice per keyword."""
 
-    brand_count: int = Field(..., description="Total brand mentions")
-    competitor_count: int = Field(..., description="Total competitor mentions")
-    total: int = Field(..., description="Total mentions across both categories")
-    brand_percent: float = Field(..., description="Brand share of voice percentage")
-    competitor_percent: float = Field(..., description="Competitor share of voice percentage")
+    keyword: str = Field(..., description="Tracked keyword")
+    category: str = Field(..., description="Keyword category")
+    count: int = Field(..., description="Mention count for this keyword")
+    percent: float = Field(..., description="Share of voice percentage")
 
 
-class SentimentBenchmarkResponse(BaseModel):
-    """Average sentiment score by category."""
+class SentimentBenchmarkStat(BaseModel):
+    """Average sentiment score per keyword."""
 
-    brand_avg: float = Field(..., description="Average sentiment score for brand keywords")
-    competitor_avg: float = Field(..., description="Average sentiment score for competitor keywords")
+    keyword: str = Field(..., description="Tracked keyword")
+    category: str = Field(..., description="Keyword category")
+    average_sentiment: float = Field(..., description="Average sentiment score")
 
 
 class ComparisonResponse(BaseModel):
     """Comparison analytics response."""
 
     workspace_id: str = Field(..., description="Workspace ID")
-    share_of_voice: ShareOfVoiceResponse = Field(..., description="Share of voice metrics")
-    sentiment_benchmark: SentimentBenchmarkResponse = Field(..., description="Sentiment benchmarking metrics")
+    share_of_voice: list[ShareOfVoiceStat] = Field(..., description="Share of voice metrics")
+    sentiment_benchmark: list[SentimentBenchmarkStat] = Field(..., description="Sentiment benchmarking metrics")
+    trends: list[dict[str, int | str]] = Field(..., description="Daily counts by keyword")
 
 
 class ImpactMention(BaseModel):
@@ -226,35 +228,47 @@ async def get_comparison(
             await ensure_workspace(session, workspace_id)
             sov_counts = await get_share_of_voice(session, workspace_id)
             sentiment_avgs = await get_sentiment_benchmark(session, workspace_id)
+            trends = await get_comparison_trends(session, workspace_id)
         except WorkspaceNotFoundError as exc:
             raise HTTPException(
                 status_code=404,
                 detail="Workspace not found. Create one via GET /api/v1/workspace/new.",
             ) from exc
 
-    brand_count = sov_counts.get("brand", 0)
-    competitor_count = sov_counts.get("competitor", 0)
-    total = brand_count + competitor_count
+    total = sum(item["count"] for item in sov_counts) if sov_counts else 0
     if total > 0:
-        brand_percent = round((brand_count / total) * 100, 2)
-        competitor_percent = round((competitor_count / total) * 100, 2)
+        sov_items = [
+            ShareOfVoiceStat(
+                keyword=item["keyword"],
+                category=item["category"],
+                count=item["count"],
+                percent=round((item["count"] / total) * 100, 2),
+            )
+            for item in sov_counts
+        ]
     else:
-        brand_percent = 0.0
-        competitor_percent = 0.0
+        sov_items = [
+            ShareOfVoiceStat(
+                keyword=item["keyword"],
+                category=item["category"],
+                count=item["count"],
+                percent=0.0,
+            )
+            for item in sov_counts
+        ]
 
     return ComparisonResponse(
         workspace_id=workspace_id,
-        share_of_voice=ShareOfVoiceResponse(
-            brand_count=brand_count,
-            competitor_count=competitor_count,
-            total=total,
-            brand_percent=brand_percent,
-            competitor_percent=competitor_percent,
-        ),
-        sentiment_benchmark=SentimentBenchmarkResponse(
-            brand_avg=round(sentiment_avgs.get("brand", 0.0), 3),
-            competitor_avg=round(sentiment_avgs.get("competitor", 0.0), 3),
-        ),
+        share_of_voice=sov_items,
+        sentiment_benchmark=[
+            SentimentBenchmarkStat(
+                keyword=item["keyword"],
+                category=item["category"],
+                average_sentiment=round(item["average_sentiment"], 3),
+            )
+            for item in sentiment_avgs
+        ],
+        trends=trends,
     )
 
 

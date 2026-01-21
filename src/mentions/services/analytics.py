@@ -181,12 +181,15 @@ def dominant_sentiment(sentiment_counts: dict[str, int]) -> str:
     return max(sentiment_counts.items(), key=lambda x: x[1])[0]
 
 
-async def get_share_of_voice(session: AsyncSession, workspace_id: str) -> dict[str, int]:
+async def get_share_of_voice(
+    session: AsyncSession,
+    workspace_id: str,
+) -> list[dict[str, int | str]]:
     """
-    Count mentions grouped by keyword category (brand vs competitor).
+    Count mentions grouped by keyword for share-of-voice.
     """
     stmt = (
-        select(TrackedKeyword.category, func.count())
+        select(TrackedKeyword.keyword, TrackedKeyword.category, func.count())
         .select_from(WorkspaceMention)
         .join(
             TrackedKeyword,
@@ -194,16 +197,23 @@ async def get_share_of_voice(session: AsyncSession, workspace_id: str) -> dict[s
             & (TrackedKeyword.keyword == WorkspaceMention.keyword),
         )
         .where(WorkspaceMention.workspace_id == workspace_id)
-        .group_by(TrackedKeyword.category)
+        .group_by(TrackedKeyword.keyword, TrackedKeyword.category)
+        .order_by(func.count().desc())
     )
     result = await session.execute(stmt)
     rows = result.all()
-    return {category or "brand": int(count or 0) for category, count in rows}
+    return [
+        {"keyword": keyword, "category": category or "brand", "count": int(count or 0)}
+        for keyword, category, count in rows
+    ]
 
 
-async def get_sentiment_benchmark(session: AsyncSession, workspace_id: str) -> dict[str, float]:
+async def get_sentiment_benchmark(
+    session: AsyncSession,
+    workspace_id: str,
+) -> list[dict[str, float | str]]:
     """
-    Average sentiment score by keyword category (brand vs competitor).
+    Average sentiment score by keyword.
     Scores: positive=1, neutral=0, negative=-1.
     """
     sentiment_score = case(
@@ -212,7 +222,7 @@ async def get_sentiment_benchmark(session: AsyncSession, workspace_id: str) -> d
         else_=0,
     )
     stmt = (
-        select(TrackedKeyword.category, func.avg(sentiment_score))
+        select(TrackedKeyword.keyword, TrackedKeyword.category, func.avg(sentiment_score))
         .select_from(WorkspaceMention)
         .join(Mention, WorkspaceMention.mention_url == Mention.url)
         .join(
@@ -221,11 +231,71 @@ async def get_sentiment_benchmark(session: AsyncSession, workspace_id: str) -> d
             & (TrackedKeyword.keyword == WorkspaceMention.keyword),
         )
         .where(WorkspaceMention.workspace_id == workspace_id)
-        .group_by(TrackedKeyword.category)
+        .group_by(TrackedKeyword.keyword, TrackedKeyword.category)
     )
     result = await session.execute(stmt)
     rows = result.all()
-    return {category or "brand": float(avg or 0.0) for category, avg in rows}
+    return [
+        {
+            "keyword": keyword,
+            "category": category or "brand",
+            "average_sentiment": float(avg or 0.0),
+        }
+        for keyword, category, avg in rows
+    ]
+
+
+async def get_comparison_trends(
+    session: AsyncSession,
+    workspace_id: str,
+) -> list[dict[str, int | str]]:
+    """
+    Return last 14 days of mention counts split by keyword.
+    """
+    days = 14
+    start_date = (datetime.utcnow() - timedelta(days=days - 1)).date()
+    start_dt = datetime.combine(start_date, datetime.min.time())
+
+    keywords_stmt = select(TrackedKeyword.keyword).where(TrackedKeyword.workspace_id == workspace_id)
+    keyword_result = await session.execute(keywords_stmt)
+    keywords = [row[0] for row in keyword_result.all()]
+
+    stmt = (
+        select(
+            func.strftime("%Y-%m-%d", Mention.created_at),
+            WorkspaceMention.keyword,
+            func.count(),
+        )
+        .select_from(WorkspaceMention)
+        .join(Mention, WorkspaceMention.mention_url == Mention.url)
+        .where(WorkspaceMention.workspace_id == workspace_id)
+        .where(Mention.created_at >= start_dt)
+        .group_by(func.strftime("%Y-%m-%d", Mention.created_at), WorkspaceMention.keyword)
+        .order_by(func.strftime("%Y-%m-%d", Mention.created_at))
+    )
+    result = await session.execute(stmt)
+    rows = result.all()
+
+    counts_by_date: dict[date, dict[str, int]] = {
+        start_date + timedelta(days=i): dict.fromkeys(keywords, 0)
+        for i in range(days)
+    }
+
+    for dt_str, keyword, count in rows:
+        dt = date.fromisoformat(dt_str)
+        if dt not in counts_by_date:
+            counts_by_date[dt] = dict.fromkeys(keywords, 0)
+        counts_by_date[dt][keyword] = int(count or 0)
+
+    timeline: list[dict[str, int | str]] = []
+    for i in range(days):
+        day = start_date + timedelta(days=i)
+        row: dict[str, int | str] = {"date": day.isoformat()}
+        for keyword in keywords:
+            row[keyword] = counts_by_date[day].get(keyword, 0)
+        timeline.append(row)
+
+    return timeline
 
 
 async def get_reach_analytics(

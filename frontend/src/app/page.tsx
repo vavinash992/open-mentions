@@ -40,16 +40,17 @@ type ChartsResponse = {
 
 type ComparisonResponse = {
   share_of_voice: {
-    brand_count: number;
-    competitor_count: number;
-    total: number;
-    brand_percent: number;
-    competitor_percent: number;
-  };
+    keyword: string;
+    category: string;
+    count: number;
+    percent: number;
+  }[];
   sentiment_benchmark: {
-    brand_avg: number;
-    competitor_avg: number;
-  };
+    keyword: string;
+    category: string;
+    average_sentiment: number;
+  }[];
+  trends: Array<Record<string, number | string>>;
 };
 
 type ReachResponse = {
@@ -144,10 +145,23 @@ export default function Home() {
     return labels[topIndex] ?? "N/A";
   }, [charts]);
 
-  const brandPercent = comparison?.share_of_voice?.brand_percent ?? 0;
-  const competitorPercent = comparison?.share_of_voice?.competitor_percent ?? 0;
-  const brandSentiment = comparison?.sentiment_benchmark?.brand_avg ?? 0;
-  const competitorSentiment = comparison?.sentiment_benchmark?.competitor_avg ?? 0;
+  const sentimentByKeyword = useMemo(() => {
+    const map = new Map<string, number>();
+    (comparison?.sentiment_benchmark ?? []).forEach((item) => {
+      map.set(item.keyword, item.average_sentiment);
+    });
+    return map;
+  }, [comparison]);
+
+  const leaderboard = useMemo(() => {
+    const items = comparison?.share_of_voice ?? [];
+    return [...items].sort((a, b) => b.percent - a.percent);
+  }, [comparison]);
+
+  const trendSeries = useMemo(() => {
+    const items = comparison?.share_of_voice ?? [];
+    return items.map((item) => item.keyword);
+  }, [comparison]);
 
   return (
     <div className="flex min-h-screen bg-slate-950">
@@ -191,56 +205,65 @@ export default function Home() {
             <SentimentChart sentimentData={charts?.sentiment} />
           </div>
           <div className="lg:col-span-2">
-            <TrendsChart points={trends?.points ?? []} days={days} />
+            <TrendsChart
+              points={comparison?.trends ?? trends?.points ?? []}
+              series={trendSeries}
+              days={days}
+            />
           </div>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
-            <Text className="mb-2 text-slate-300">Share of Voice</Text>
-            <div className="flex items-end justify-between">
-              <div>
-                <Text className="text-xs text-slate-400">Brand</Text>
-                <Metric className="text-slate-100">{brandPercent.toFixed(1)}%</Metric>
-              </div>
-              <div className="text-right">
-                <Text className="text-xs text-slate-400">Competitors</Text>
-                <Metric className="text-slate-100">
-                  {competitorPercent.toFixed(1)}%
-                </Metric>
-              </div>
-            </div>
-            <div className="mt-4 h-2 w-full rounded-full bg-slate-900">
-              <div
-                className="h-2 rounded-full bg-emerald-500"
-                style={{ width: `${Math.min(100, Math.max(0, brandPercent))}%` }}
-              />
-            </div>
-            <div className="mt-2 text-xs text-slate-500">
-              {comparison?.share_of_voice?.brand_count ?? 0} brand vs{" "}
-              {comparison?.share_of_voice?.competitor_count ?? 0} competitor
-              mentions
-            </div>
-          </Card>
-          <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
-            <Text className="mb-2 text-slate-300">Sentiment Benchmark</Text>
-            <div className="flex items-end justify-between">
-              <div>
-                <Text className="text-xs text-slate-400">Brand Avg</Text>
-                <Metric className="text-slate-100">{brandSentiment.toFixed(2)}</Metric>
-              </div>
-              <div className="text-right">
-                <Text className="text-xs text-slate-400">Competitor Avg</Text>
-                <Metric className="text-slate-100">
-                  {competitorSentiment.toFixed(2)}
-                </Metric>
-              </div>
-            </div>
-            <div className="mt-3 text-xs text-slate-500">
-              Scores: positive = 1, neutral = 0, negative = -1
-            </div>
-          </Card>
-        </div>
+        <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
+          <div className="flex items-center justify-between">
+            <Text className="text-slate-300">Share of Voice Leaderboard</Text>
+            <div className="text-xs text-slate-500">Sentiment score: +1 to -1</div>
+          </div>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-slate-800 text-slate-400">
+                <tr>
+                  <th className="px-2 py-2">Rank</th>
+                  <th className="px-2 py-2">Keyword</th>
+                  <th className="px-2 py-2">Category</th>
+                  <th className="px-2 py-2">Sentiment</th>
+                  <th className="px-2 py-2">SOV %</th>
+                  <th className="px-2 py-2">Mentions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leaderboard.map((item, index) => (
+                  <tr key={item.keyword} className="border-b border-slate-900 text-slate-200">
+                    <td className="px-2 py-2 text-slate-300">{index + 1}</td>
+                    <td className="px-2 py-2 text-slate-300">{item.keyword}</td>
+                    <td className="px-2 py-2">
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                          item.category === "competitor"
+                            ? "bg-rose-900/40 text-rose-300"
+                            : "bg-emerald-900/40 text-emerald-300"
+                        }`}
+                      >
+                        {item.category}
+                      </span>
+                    </td>
+                    <td className="px-2 py-2 text-slate-300">
+                      {(sentimentByKeyword.get(item.keyword) ?? 0).toFixed(2)}
+                    </td>
+                    <td className="px-2 py-2 text-slate-300">{item.percent.toFixed(2)}%</td>
+                    <td className="px-2 py-2 text-slate-300">{item.count}</td>
+                  </tr>
+                ))}
+                {leaderboard.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-6 text-center text-slate-500">
+                      No comparison data yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
 
         <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
           <div className="flex items-center justify-between">
