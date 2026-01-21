@@ -52,6 +52,17 @@ type ComparisonResponse = {
   };
 };
 
+type ReachResponse = {
+  estimated_reach: number;
+  most_impactful: {
+    url: string;
+    platform: string;
+    summary: string;
+    keyword: string;
+    impact_score: number;
+  }[];
+};
+
 type HistoryResponse = {
   mentions: {
     keyword: string;
@@ -80,6 +91,9 @@ export default function Home() {
   const comparisonKey = workspaceId
     ? `/api/v1/analytics/comparison?workspace_id=${workspaceId}`
     : null;
+  const reachKey = workspaceId
+    ? `/api/v1/analytics/reach?workspace_id=${workspaceId}`
+    : null;
   const historyKey = workspaceId
     ? `/api/v1/history?workspace_id=${workspaceId}&page=1&page_size=10`
     : null;
@@ -94,6 +108,9 @@ export default function Home() {
     refreshInterval: 30000,
   });
   const { data: comparison } = useSWR<ComparisonResponse>(comparisonKey, fetcher, {
+    refreshInterval: 30000,
+  });
+  const { data: reach } = useSWR<ReachResponse>(reachKey, fetcher, {
     refreshInterval: 30000,
   });
   const { data: history } = useSWR<HistoryResponse>(historyKey, fetcher, {
@@ -224,6 +241,59 @@ export default function Home() {
             </div>
           </Card>
         </div>
+
+        <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
+          <div className="flex items-center justify-between">
+            <Text className="text-slate-300">Reach & Impact</Text>
+            <div className="text-right">
+              <Text className="text-xs text-slate-500">Estimated Reach</Text>
+              <Metric className="text-slate-100">{reach?.estimated_reach ?? 0}</Metric>
+            </div>
+          </div>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-slate-800 text-slate-400">
+                <tr>
+                  <th className="px-2 py-2">Platform</th>
+                  <th className="px-2 py-2">Summary</th>
+                  <th className="px-2 py-2">Keyword</th>
+                  <th className="px-2 py-2">Impact</th>
+                  <th className="px-2 py-2">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(reach?.most_impactful ?? []).map((item) => (
+                  <tr key={item.url} className="border-b border-slate-900 text-slate-200">
+                    <td className="px-2 py-2 capitalize">{item.platform}</td>
+                    <td className="px-2 py-2 text-slate-300">{item.summary}</td>
+                    <td className="px-2 py-2 text-slate-300">{item.keyword}</td>
+                    <td className="px-2 py-2 text-slate-300">{item.impact_score}</td>
+                    <td className="px-2 py-2">
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-emerald-400 hover:underline"
+                      >
+                        View
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+                {(reach?.most_impactful?.length ?? 0) === 0 && (
+                  <tr>
+                    <td
+                      colSpan={5}
+                      className="px-4 py-6 text-center text-slate-500"
+                    >
+                      No impact data yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
 
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2" id="mentions">

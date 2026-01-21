@@ -13,6 +13,7 @@ from mentions.services.analytics import (
     ensure_workspace,
     get_average_relevance,
     get_platform_counts,
+    get_reach_analytics,
     get_sentiment_benchmark,
     get_sentiment_counts,
     get_share_of_voice,
@@ -90,6 +91,24 @@ class ComparisonResponse(BaseModel):
     workspace_id: str = Field(..., description="Workspace ID")
     share_of_voice: ShareOfVoiceResponse = Field(..., description="Share of voice metrics")
     sentiment_benchmark: SentimentBenchmarkResponse = Field(..., description="Sentiment benchmarking metrics")
+
+
+class ImpactMention(BaseModel):
+    """Most impactful mention summary."""
+
+    url: str = Field(..., description="Mention URL")
+    platform: str = Field(..., description="Platform name")
+    summary: str = Field(..., description="Summary text")
+    keyword: str = Field(..., description="Keyword that found the mention")
+    impact_score: int = Field(..., description="Computed impact score")
+
+
+class ReachResponse(BaseModel):
+    """Reach & impact analytics response."""
+
+    workspace_id: str = Field(..., description="Workspace ID")
+    estimated_reach: int = Field(..., description="Total estimated reach score")
+    most_impactful: list[ImpactMention] = Field(..., description="Top 5 impactful mentions")
 
 
 @analytics_router.get("/summary", response_model=SummaryResponse)
@@ -236,4 +255,26 @@ async def get_comparison(
             brand_avg=round(sentiment_avgs.get("brand", 0.0), 3),
             competitor_avg=round(sentiment_avgs.get("competitor", 0.0), 3),
         ),
+    )
+
+
+@analytics_router.get("/reach", response_model=ReachResponse)
+async def get_reach(
+    workspace_id: str = Query(..., min_length=1, description="Workspace ID"),
+) -> ReachResponse:
+    """Return reach and impact analytics for a workspace."""
+    async with async_session_maker() as session:
+        try:
+            await ensure_workspace(session, workspace_id)
+            total_reach, top_mentions = await get_reach_analytics(session, workspace_id)
+        except WorkspaceNotFoundError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Workspace not found. Create one via GET /api/v1/workspace/new.",
+            ) from exc
+
+    return ReachResponse(
+        workspace_id=workspace_id,
+        estimated_reach=total_reach,
+        most_impactful=[ImpactMention(**mention) for mention in top_mentions],
     )

@@ -226,3 +226,52 @@ async def get_sentiment_benchmark(session: AsyncSession, workspace_id: str) -> d
     result = await session.execute(stmt)
     rows = result.all()
     return {category or "brand": float(avg or 0.0) for category, avg in rows}
+
+
+async def get_reach_analytics(
+    session: AsyncSession,
+    workspace_id: str,
+) -> tuple[int, list[dict[str, int | str]]]:
+    """
+    Compute total estimated reach and top 5 impactful mentions for a workspace.
+    Impact score = (upvotes * 2) + (comments * 5) + 10.
+    """
+    impact_score = func.coalesce(Mention.upvotes, 0) * 2 + func.coalesce(Mention.comments, 0) * 5 + 10
+
+    total_stmt = (
+        select(func.sum(impact_score))
+        .select_from(WorkspaceMention)
+        .join(Mention, WorkspaceMention.mention_url == Mention.url)
+        .where(WorkspaceMention.workspace_id == workspace_id)
+    )
+    total_result = await session.execute(total_stmt)
+    total_reach = int(total_result.scalar() or 0)
+
+    top_stmt = (
+        select(
+            Mention.url,
+            Mention.platform,
+            Mention.summary,
+            WorkspaceMention.keyword,
+            impact_score.label("impact_score"),
+        )
+        .select_from(WorkspaceMention)
+        .join(Mention, WorkspaceMention.mention_url == Mention.url)
+        .where(WorkspaceMention.workspace_id == workspace_id)
+        .order_by(impact_score.desc())
+        .limit(5)
+    )
+    top_result = await session.execute(top_stmt)
+    rows = top_result.all()
+
+    top_mentions = [
+        {
+            "url": url,
+            "platform": platform or "unknown",
+            "summary": summary or "",
+            "keyword": keyword or "",
+            "impact_score": int(score or 0),
+        }
+        for url, platform, summary, keyword, score in rows
+    ]
+    return total_reach, top_mentions
