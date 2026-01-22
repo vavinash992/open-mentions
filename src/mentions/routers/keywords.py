@@ -235,7 +235,6 @@ async def delete_keyword(
         HTTPException: If keyword not found or doesn't belong to workspace.
     """
     async with async_session_maker() as session:
-        # Find keyword
         statement = (
             select(TrackedKeyword)
             .where(TrackedKeyword.id == keyword_id)
@@ -244,24 +243,15 @@ async def delete_keyword(
         result = await session.execute(statement)
         keyword = result.scalar_one_or_none()
 
-    if not keyword:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Keyword with ID {keyword_id} not found in this workspace.",
-        )
+        if not keyword:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Keyword with ID {keyword_id} not found in this workspace.",
+            )
 
-    async with async_session_maker() as session:
-        # Re-fetch to avoid detached instance
-        statement = select(TrackedKeyword).where(TrackedKeyword.id == keyword_id)
-        result = await session.execute(statement)
-        kw = result.scalar_one_or_none()
-        if kw:
-            # Soft delete (deactivate)
-            kw.is_active = False
-            session.add(kw)
-            await session.commit()
+        keyword.is_active = False
+        session.add(keyword)
 
-    async with async_session_maker() as session:
         delete_stmt = (
             delete(WorkspaceMention)
             .where(WorkspaceMention.workspace_id == workspace_id)
@@ -270,14 +260,14 @@ async def delete_keyword(
         await session.execute(delete_stmt)
         await session.commit()
 
-    logger.info(f"Deactivated keyword '{keyword.keyword}' (ID: {keyword_id}) for workspace '{workspace_id}'")
+        logger.info(
+            "Deactivated keyword '%s' (ID: %s) for workspace '%s'",
+            keyword.keyword,
+            keyword_id,
+            workspace_id,
+        )
 
-    return KeywordDeleteResponse(
-        message=f"Keyword '{keyword.keyword}' has been deactivated.",
-        keyword_id=keyword_id,
-    )
-
-    raise HTTPException(
-        status_code=404,
-        detail=f"Keyword with ID {keyword_id} not found.",
-    )
+        return KeywordDeleteResponse(
+            message=f"Keyword '{keyword.keyword}' has been deactivated.",
+            keyword_id=keyword_id,
+        )

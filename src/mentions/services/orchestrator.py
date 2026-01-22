@@ -62,63 +62,84 @@ class SearchOrchestrator:
             ("stackexchange", StackExchangeScraper()),
         ]
 
-        # Run all scrapers concurrently using asyncio
-        tasks = [
-            self._scrape_platform(name, scraper, company_name, filter_by, max_results_per_platform)
-            for name, scraper in scrapers
-        ]
-
-        # Wait for all scrapers to complete
-        all_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Flatten results and handle exceptions
-        items: list[ScrapedItem] = []
-        for i, result in enumerate(all_results):
-            platform_name = scrapers[i][0]
-            if isinstance(result, Exception):
-                logger.error(f"Error scraping {platform_name}: {result}")
-                continue
-            if isinstance(result, list):
-                items.extend(result)
-            else:
-                logger.warning(f"Unexpected result type from {platform_name}: {type(result)}")
-
-        logger.info(f"Scraped {len(items)} total items across all platforms")
-
-        if not items:
-            logger.info("No items to process")
-            return []
-
         if not workspace_id:
             # The API layer should enforce this; keep a safe no-op fallback.
             return []
 
-        # Global URL deduplication: only classify URLs that don't exist in Mention table.
+        tasks = [
+            self._process_platform_pipeline(
+                platform_name=name,
+                scraper=scraper,
+                keyword=company_name,
+                filter_by=filter_by,
+                max_results_per_platform=max_results_per_platform,
+                workspace_id=workspace_id,
+                include_existing=include_existing,
+            )
+            for name, scraper in scrapers
+        ]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        linked_items: list[ScrapedItem] = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"Error processing platform pipeline: {result}")
+                continue
+            linked_items.extend(result)
+
+        logger.info(f"Returning {len(linked_items)} relevant mention(s) for workspace '{workspace_id}'")
+        return linked_items
+
+    async def _process_platform_pipeline(
+        self,
+        *,
+        platform_name: str,
+        scraper,
+        keyword: str,
+        filter_by: str,
+        max_results_per_platform: int,
+        workspace_id: str,
+        include_existing: bool,
+    ) -> list[ScrapedItem]:
+        """
+        Run the full pipeline for a single platform.
+        """
+        try:
+            items = await self._scrape_platform(
+                platform_name,
+                scraper,
+                keyword,
+                filter_by,
+                max_results_per_platform,
+            )
+        except Exception as e:
+            logger.error(f"Error scraping {platform_name}: {e}")
+            return []
+
+        if not items:
+            return []
+
         new_items, existing_urls = await self._split_by_global_dedup(items)
         logger.info(
-            f"Global dedup: {len(existing_urls)} URL(s) already classified, {len(new_items)} new URL(s) to classify"
+            f"[{platform_name}] Global dedup: {len(existing_urls)} existing, {len(new_items)} new"
         )
 
-        # Classify only new URLs
         if new_items:
-            logger.info(f"Classifying {len(new_items)} new URL(s) with LLM...")
-            classified_new_items = await self.llm_processor.process_mentions(new_items, company_name)
-            # Persist newly classified mentions globally (one per URL)
+            logger.info(f"[{platform_name}] Classifying {len(new_items)} new item(s) with LLM...")
+            classified_new_items = await self.llm_processor.process_mentions(new_items, keyword)
             await self._save_mentions_global(classified_new_items)
-        else:
-            classified_new_items = []
 
-        # Link relevant mentions to this workspace (association table)
         urls_to_link = [item.url for item in items]
         linked_items = await self._link_workspace_mentions(
             workspace_id=workspace_id,
-            keyword=company_name,
+            keyword=keyword,
             urls=urls_to_link,
             include_existing=include_existing,
         )
 
-        # Only return relevant mentions for this workspace+keyword (as ScrapedItem)
-        logger.info(f"Returning {len(linked_items)} relevant mention(s) for workspace '{workspace_id}'")
+        logger.info(
+            f"[{platform_name}] Linked {len(linked_items)} relevant mention(s) for '{keyword}'"
+        )
         return linked_items
 
     async def _scrape_platform(
