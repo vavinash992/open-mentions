@@ -262,7 +262,7 @@ export default function Home() {
         const triggerResponse = await api.post(
           `/api/v1/monitor/trigger?workspace_id=${workspaceId}`,
           null,
-          { timeout: 10000 }
+          { timeout: 30000 }
         );
         jobId = triggerResponse.data?.job_id ?? null;
       } catch (error) {

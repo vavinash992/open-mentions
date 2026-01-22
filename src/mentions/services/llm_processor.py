@@ -1,5 +1,6 @@
 """LLM Processor Service for classifying and summarizing scraped items using Azure OpenAI and instructor."""
 
+import asyncio
 import os
 from typing import Optional
 
@@ -79,6 +80,7 @@ class LLMProcessor:
 
         self.deployment_name = deployment_name
         self.api_version = api_version
+        self._llm_semaphore = asyncio.Semaphore(10)
 
         logger.info(f"LLMProcessor initialized with deployment: {deployment_name} at {endpoint}")
 
@@ -169,16 +171,18 @@ class LLMProcessor:
         Returns:
             List of ScrapedItem objects with all classification fields populated.
         """
-        import asyncio
-
         if not items:
             logger.info("No items to process")
             return items
 
         logger.info(f"Processing {len(items)} mentions for {company_name}")
 
-        # Process all items concurrently
-        tasks = [self.classify_and_summarize(item, company_name) for item in items]
+        async def _bounded_classify(target: ScrapedItem) -> ClassificationResult:
+            async with self._llm_semaphore:
+                return await self.classify_and_summarize(target, company_name)
+
+        # Process items concurrently with throttling
+        tasks = [_bounded_classify(item) for item in items]
         classifications = await asyncio.gather(*tasks, return_exceptions=True)
 
         # Update items with classification results

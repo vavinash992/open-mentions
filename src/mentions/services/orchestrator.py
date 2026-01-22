@@ -199,14 +199,13 @@ class SearchOrchestrator:
             return
 
         async with async_session_maker() as session:
-            for item in items:
-                try:
-                    mention = Mention.from_scraped_item(item)
-                    session.add(mention)
-                    await session.commit()
-                except Exception as e:
-                    await session.rollback()
-                    logger.debug(f"Skipping mention save for {item.url}: {e}")
+            try:
+                mentions = [Mention.from_scraped_item(item) for item in items]
+                session.add_all(mentions)
+                await session.commit()
+            except Exception as e:
+                await session.rollback()
+                logger.debug("Skipping batch mention save due to error: %s", e)
 
     async def _link_workspace_mentions(
         self,
@@ -247,11 +246,14 @@ class SearchOrchestrator:
         new_links = [m for m in mentions if m.url not in existing_links]
 
         # Insert new workspace links (idempotent via PK)
-        async with async_session_maker() as session:
-            for m in new_links:
+        if new_links:
+            async with async_session_maker() as session:
                 try:
-                    link = WorkspaceMention(workspace_id=workspace_id, mention_url=m.url, keyword=keyword)
-                    session.add(link)
+                    links = [
+                        WorkspaceMention(workspace_id=workspace_id, mention_url=m.url, keyword=keyword)
+                        for m in new_links
+                    ]
+                    session.add_all(links)
                     await session.commit()
                 except Exception:
                     await session.rollback()

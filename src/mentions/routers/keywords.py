@@ -5,10 +5,10 @@ from typing import Optional
 from fastapi import APIRouter, Header, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from mentions.db.session import async_session_maker
-from mentions.models.database import TrackedKeyword, Workspace
+from mentions.models.database import TrackedKeyword, Workspace, WorkspaceMention
 
 keywords_router = APIRouter(prefix="/api/v1", tags=["keywords"])
 
@@ -261,12 +261,21 @@ async def delete_keyword(
             session.add(kw)
             await session.commit()
 
-            logger.info(f"Deactivated keyword '{kw.keyword}' (ID: {keyword_id}) for workspace '{workspace_id}'")
+    async with async_session_maker() as session:
+        delete_stmt = (
+            delete(WorkspaceMention)
+            .where(WorkspaceMention.workspace_id == workspace_id)
+            .where(WorkspaceMention.keyword == keyword.keyword)
+        )
+        await session.execute(delete_stmt)
+        await session.commit()
 
-            return KeywordDeleteResponse(
-                message=f"Keyword '{kw.keyword}' has been deactivated.",
-                keyword_id=keyword_id,
-            )
+    logger.info(f"Deactivated keyword '{keyword.keyword}' (ID: {keyword_id}) for workspace '{workspace_id}'")
+
+    return KeywordDeleteResponse(
+        message=f"Keyword '{keyword.keyword}' has been deactivated.",
+        keyword_id=keyword_id,
+    )
 
     raise HTTPException(
         status_code=404,

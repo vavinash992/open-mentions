@@ -197,6 +197,7 @@ async def get_share_of_voice(
             & (TrackedKeyword.keyword == WorkspaceMention.keyword),
         )
         .where(WorkspaceMention.workspace_id == workspace_id)
+        .where(TrackedKeyword.is_active == True)  # noqa: E712
         .group_by(TrackedKeyword.keyword, TrackedKeyword.category)
         .order_by(func.count().desc())
     )
@@ -231,6 +232,7 @@ async def get_sentiment_benchmark(
             & (TrackedKeyword.keyword == WorkspaceMention.keyword),
         )
         .where(WorkspaceMention.workspace_id == workspace_id)
+        .where(TrackedKeyword.is_active == True)  # noqa: E712
         .group_by(TrackedKeyword.keyword, TrackedKeyword.category)
     )
     result = await session.execute(stmt)
@@ -256,7 +258,11 @@ async def get_comparison_trends(
     start_date = (datetime.utcnow() - timedelta(days=days - 1)).date()
     start_dt = datetime.combine(start_date, datetime.min.time())
 
-    keywords_stmt = select(TrackedKeyword.keyword).where(TrackedKeyword.workspace_id == workspace_id)
+    keywords_stmt = (
+        select(TrackedKeyword.keyword)
+        .where(TrackedKeyword.workspace_id == workspace_id)
+        .where(TrackedKeyword.is_active == True)  # noqa: E712
+    )
     keyword_result = await session.execute(keywords_stmt)
     keywords = [row[0] for row in keyword_result.all()]
 
@@ -268,8 +274,14 @@ async def get_comparison_trends(
         )
         .select_from(WorkspaceMention)
         .join(Mention, WorkspaceMention.mention_url == Mention.url)
+        .join(
+            TrackedKeyword,
+            (TrackedKeyword.workspace_id == WorkspaceMention.workspace_id)
+            & (TrackedKeyword.keyword == WorkspaceMention.keyword),
+        )
         .where(WorkspaceMention.workspace_id == workspace_id)
         .where(Mention.created_at >= start_dt)
+        .where(TrackedKeyword.is_active == True)  # noqa: E712
         .group_by(func.strftime("%Y-%m-%d", Mention.created_at), WorkspaceMention.keyword)
         .order_by(func.strftime("%Y-%m-%d", Mention.created_at))
     )
