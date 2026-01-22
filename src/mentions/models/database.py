@@ -167,3 +167,27 @@ class WorkspaceRateLimit(SQLModel, table=True):
 
     workspace_id: str = Field(foreign_key="workspaces.workspace_id", primary_key=True)
     last_trigger_at: datetime | None = Field(default=None)
+
+
+class WorkspaceTriggerJob(SQLModel, table=True):
+    """
+    Background monitoring job status per workspace.
+    """
+
+    __tablename__ = "workspace_trigger_jobs"
+    __table_args__ = (
+        Index("ix_workspace_trigger_jobs_workspace_id", "workspace_id"),
+        Index("ix_workspace_trigger_jobs_created_at", "created_at"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    job_id: str = Field(..., unique=True, index=True, description="Public job identifier")
+    workspace_id: str = Field(foreign_key="workspaces.workspace_id", index=True)
+    status: str = Field(default="pending", description="pending, running, completed, failed")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime | None = Field(default=None)
+    completed_at: datetime | None = Field(default=None)
+    keywords_processed: int | None = Field(default=None)
+    total_new_mentions: int | None = Field(default=None)
+    keyword_results: str | None = Field(default=None, description="JSON summary of keyword results")
+    error: str | None = Field(default=None, description="Error message if failed")

@@ -1,6 +1,11 @@
 """Monitor Router for manual monitoring triggers and scheduler status."""
 
+from __future__ import annotations
+
+import asyncio
+import json
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from loguru import logger
@@ -8,7 +13,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from mentions.db.session import async_session_maker
-from mentions.models.database import TrackedKeyword, Workspace, WorkspaceRateLimit
+from mentions.models.database import (
+    TrackedKeyword,
+    Workspace,
+    WorkspaceRateLimit,
+    WorkspaceTriggerJob,
+)
 from mentions.services.monitoring_scheduler import get_scheduler
 from mentions.services.orchestrator import SearchOrchestrator
 
@@ -42,6 +52,30 @@ class WorkspaceMonitoringResponse(BaseModel):
     keywords_processed: int = Field(..., description="Number of keywords processed")
     total_new_mentions: int = Field(..., description="Total new mentions found")
     keyword_results: list[dict] = Field(..., description="Results per keyword")
+
+
+class TriggerJobResponse(BaseModel):
+    """Response model for async monitoring trigger."""
+
+    message: str = Field(..., description="Status message")
+    workspace_id: str = Field(..., description="The workspace ID")
+    job_id: str = Field(..., description="Background job ID")
+    status: str = Field(..., description="Job status")
+
+
+class MonitorJobStatusResponse(BaseModel):
+    """Response model for monitoring job status."""
+
+    job_id: str = Field(..., description="Job ID")
+    workspace_id: str = Field(..., description="Workspace ID")
+    status: str = Field(..., description="Job status")
+    created_at: str = Field(..., description="Creation timestamp")
+    started_at: str | None = Field(None, description="Start timestamp")
+    completed_at: str | None = Field(None, description="Completion timestamp")
+    keywords_processed: int | None = Field(None, description="Number of keywords processed")
+    total_new_mentions: int | None = Field(None, description="Total new mentions found")
+    keyword_results: list[dict] | None = Field(None, description="Results per keyword")
+    error: str | None = Field(None, description="Error message if failed")
 
 
 async def check_rate_limit(workspace_id: str) -> tuple[bool, datetime | None]:
@@ -102,11 +136,97 @@ async def update_rate_limit(workspace_id: str) -> None:
         await session.commit()
 
 
-@monitor_router.post("/monitor/trigger", response_model=WorkspaceMonitoringResponse)
+async def _run_monitor_job(job_id: str, workspace_id: str, keywords: list[dict]) -> None:
+    orchestrator = SearchOrchestrator()
+    total_new_mentions = 0
+    keyword_results: list[dict] = []
+    started_at = datetime.now(timezone.utc)
+
+    async with async_session_maker() as session:
+        stmt = select(WorkspaceTriggerJob).where(WorkspaceTriggerJob.job_id == job_id)
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
+        if job:
+            job.status = "running"
+            job.started_at = started_at
+            session.add(job)
+            await session.commit()
+
+    for tracked_keyword in keywords:
+        try:
+            mentions = await orchestrator.search_all_platforms(
+                company_name=tracked_keyword["keyword"],
+                filter_by="week",
+                max_results_per_platform=50,
+                workspace_id=workspace_id,
+                include_existing=False,
+            )
+
+            async with async_session_maker() as session:
+                stmt = select(TrackedKeyword).where(TrackedKeyword.id == tracked_keyword["id"])
+                res = await session.execute(stmt)
+                kw = res.scalar_one_or_none()
+                if kw:
+                    kw.last_searched_at = datetime.now(timezone.utc)
+                    session.add(kw)
+                    await session.commit()
+
+            mentions_count = len(mentions)
+            total_new_mentions += mentions_count
+            keyword_results.append(
+                {
+                    "keyword": tracked_keyword["keyword"],
+                    "new_mentions": mentions_count,
+                    "status": "success",
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error processing keyword '{tracked_keyword['keyword']}': {e}")
+            keyword_results.append(
+                {
+                    "keyword": tracked_keyword["keyword"],
+                    "new_mentions": 0,
+                    "status": "error",
+                    "error": str(e),
+                }
+            )
+
+    completed_at = datetime.now(timezone.utc)
+    async with async_session_maker() as session:
+        stmt = select(WorkspaceTriggerJob).where(WorkspaceTriggerJob.job_id == job_id)
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
+        if job:
+            job.status = "completed"
+            job.completed_at = completed_at
+            job.keywords_processed = len(keywords)
+            job.total_new_mentions = total_new_mentions
+            job.keyword_results = json.dumps(keyword_results)
+            session.add(job)
+            await session.commit()
+
+
+def _serialize_job(job: WorkspaceTriggerJob) -> MonitorJobStatusResponse:
+    keyword_results = json.loads(job.keyword_results) if job.keyword_results else None
+    return MonitorJobStatusResponse(
+        job_id=job.job_id,
+        workspace_id=job.workspace_id,
+        status=job.status,
+        created_at=job.created_at.isoformat(),
+        started_at=job.started_at.isoformat() if job.started_at else None,
+        completed_at=job.completed_at.isoformat() if job.completed_at else None,
+        keywords_processed=job.keywords_processed,
+        total_new_mentions=job.total_new_mentions,
+        keyword_results=keyword_results,
+        error=job.error,
+    )
+
+
+@monitor_router.post("/monitor/trigger", response_model=TriggerJobResponse, status_code=202)
 async def trigger_monitoring(
     workspace_id: str | None = Query(None, description="Workspace ID"),
     workspace_id_header: str | None = Header(None, alias="X-Workspace-ID", description="Workspace ID (legacy)"),
-) -> WorkspaceMonitoringResponse:
+) -> TriggerJobResponse:
     """
     Manually trigger a monitoring run for a workspace's active keywords.
 
@@ -169,59 +289,41 @@ async def trigger_monitoring(
             detail="No active keywords found for this workspace. Add keywords first.",
         )
 
-    # Update rate limit
+    # Update rate limit and create job
     await update_rate_limit(workspace_id)
+    job_id = uuid4().hex
 
-    # Process each keyword
-    orchestrator = SearchOrchestrator()
-    total_new_mentions = 0
-    keyword_results = []
+    async with async_session_maker() as session:
+        job = WorkspaceTriggerJob(
+            job_id=job_id,
+            workspace_id=workspace_id,
+            status="pending",
+        )
+        session.add(job)
+        await session.commit()
 
-    for tracked_keyword in keywords:
-        try:
-            mentions = await orchestrator.search_all_platforms(
-                company_name=tracked_keyword.keyword,
-                filter_by="week",
-                max_results_per_platform=50,
-                workspace_id=workspace_id,
-                include_existing=False,
-            )
+    keyword_payload = [{"id": kw.id, "keyword": kw.keyword} for kw in keywords]
+    task = asyncio.create_task(_run_monitor_job(job_id, workspace_id, keyword_payload))
+    logger.debug("Started monitoring job task %s for workspace %s", task.get_name(), workspace_id)
 
-            # Update last_searched_at
-            async with async_session_maker() as session:
-                # Re-fetch to avoid detached instance
-                stmt = select(TrackedKeyword).where(TrackedKeyword.id == tracked_keyword.id)
-                res = await session.execute(stmt)
-                kw = res.scalar_one_or_none()
-                if kw:
-                    kw.last_searched_at = datetime.now(timezone.utc)
-                    session.add(kw)
-                    await session.commit()
-
-            mentions_count = len(mentions)
-            total_new_mentions += mentions_count
-            keyword_results.append({
-                "keyword": tracked_keyword.keyword,
-                "new_mentions": mentions_count,
-                "status": "success",
-            })
-
-        except Exception as e:
-            logger.error(f"Error processing keyword '{tracked_keyword.keyword}': {e}")
-            keyword_results.append({
-                "keyword": tracked_keyword.keyword,
-                "new_mentions": 0,
-                "status": "error",
-                "error": str(e),
-            })
-
-    return WorkspaceMonitoringResponse(
-        message="Monitoring completed successfully",
+    return TriggerJobResponse(
+        message="Monitoring job queued",
         workspace_id=workspace_id,
-        keywords_processed=len(keywords),
-        total_new_mentions=total_new_mentions,
-        keyword_results=keyword_results,
+        job_id=job_id,
+        status="pending",
     )
+
+
+@monitor_router.get("/monitor/jobs/{job_id}", response_model=MonitorJobStatusResponse)
+async def get_job_status(job_id: str) -> MonitorJobStatusResponse:
+    """Return background monitoring job status."""
+    async with async_session_maker() as session:
+        stmt = select(WorkspaceTriggerJob).where(WorkspaceTriggerJob.job_id == job_id)
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found.")
+    return _serialize_job(job)
 
 
 @monitor_router.get("/monitor/status", response_model=SchedulerStatusResponse)

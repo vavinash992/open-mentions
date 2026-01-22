@@ -210,6 +210,7 @@ export default function Home() {
     if (!workspaceId) return;
     setCompareError(null);
     setIsComparing(true);
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const postKeyword = async (keyword: string, category: "brand" | "competitor") => {
       const value = keyword.trim();
       if (!value) {
@@ -232,6 +233,12 @@ export default function Home() {
             message: `Keyword "${value}" timed out. Please try again in a moment.`,
           };
         }
+        if (isAxiosError(error) && !error.response) {
+          return {
+            ok: false,
+            message: "Network error. Is the API server running?",
+          };
+        }
         throw error;
       }
     };
@@ -249,19 +256,58 @@ export default function Home() {
       }
       let rateLimited = false;
       let rateLimitMessage: string | null = null;
+      let triggerTimedOut = false;
+      let jobId: string | null = null;
       try {
-        await api.post(`/api/v1/monitor/trigger?workspace_id=${workspaceId}`, null, {
-          timeout: 60000,
-        });
+        const triggerResponse = await api.post(
+          `/api/v1/monitor/trigger?workspace_id=${workspaceId}`,
+          null,
+          { timeout: 10000 }
+        );
+        jobId = triggerResponse.data?.job_id ?? null;
       } catch (error) {
         if (isAxiosError(error) && error.response?.status === 429) {
           rateLimited = true;
           const detail = error.response?.data?.detail;
           rateLimitMessage =
             typeof detail === "string" ? detail : detail?.message ?? null;
+        } else if (isAxiosError(error) && error.code === "ECONNABORTED") {
+          triggerTimedOut = true;
         } else {
           throw error;
         }
+      }
+      if (jobId) {
+        let completed = false;
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          await sleep(3000);
+          try {
+            const statusResponse = await api.get(`/api/v1/monitor/jobs/${jobId}`, {
+              timeout: 20000,
+            });
+            const status = statusResponse.data?.status;
+            if (status === "completed") {
+              completed = true;
+              break;
+            }
+            if (status === "failed") {
+              setCompareError(statusResponse.data?.error ?? "Job failed.");
+              completed = true;
+              break;
+            }
+          } catch (pollError) {
+            if (isAxiosError(pollError) && pollError.code === "ECONNABORTED") {
+              setCompareError("Status check timed out. Refresh in a bit.");
+              break;
+            }
+            console.error("Job status check failed", pollError);
+          }
+        }
+        if (!completed) {
+          setCompareError("Job is still running. Refresh in a bit.");
+        }
+      } else if (triggerTimedOut) {
+        setCompareError("Trigger is running. Refresh in a bit.");
       }
       await Promise.all([
         mutateSummary(),

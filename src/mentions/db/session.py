@@ -12,6 +12,7 @@ from mentions.models.database import (  # noqa: F401
     Workspace,
     WorkspaceMention,
     WorkspaceRateLimit,
+    WorkspaceTriggerJob,
 )
 
 # Database file path - stored in project root
