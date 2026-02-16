@@ -4,7 +4,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 
 from mentions.db.session import async_session_maker
 from mentions.models.database import Mention, Workspace, WorkspaceMention
@@ -79,9 +79,23 @@ async def get_history(
             if is_relevant is not None:
                 base_query = base_query.where(Mention.is_relevant == is_relevant)
 
-            # Count (simple count via fetch; acceptable for now, can optimize with COUNT(*) later)
-            count_result = await session.execute(base_query)
-            total_count = len(count_result.all())
+            # Optimized count using SQL COUNT() instead of fetching all rows
+            count_query = select(func.count()).select_from(WorkspaceMention).join(
+                Mention, WorkspaceMention.mention_url == Mention.url
+            ).where(WorkspaceMention.workspace_id == workspace_id)
+
+            # Apply same filters to count query
+            if keyword:
+                count_query = count_query.where(WorkspaceMention.keyword == keyword)
+            if platform:
+                count_query = count_query.where(Mention.platform == platform)
+            if sentiment:
+                count_query = count_query.where(Mention.sentiment == sentiment)
+            if is_relevant is not None:
+                count_query = count_query.where(Mention.is_relevant == is_relevant)
+
+            count_result = await session.execute(count_query)
+            total_count = count_result.scalar() or 0
 
             # Pagination
             offset = (page - 1) * page_size

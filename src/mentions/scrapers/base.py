@@ -61,7 +61,7 @@ class BaseScraper(ABC):
     Abstract base class for all platform scrapers (e.g., Reddit, X, Instagram).
     """
 
-    REQUIRED_PROXY_COUNT = 5
+    REQUIRED_PROXY_COUNT = 2  # Reduced from 5 to speed up startup
     USER_AGENTS: ClassVar[list[str]] = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.1 Safari/605.1.15",
@@ -134,7 +134,7 @@ class BaseScraper(ABC):
         """
         try:
             proxy = {"http": random.choice(self.proxies)} if self.proxies else None  # noqa: S311
-            response = requests.get(url, headers=headers, params=params, proxies=proxy, timeout=900)
+            response = requests.get(url, headers=headers, params=params, proxies=proxy, timeout=30)
             response.raise_for_status()
         except requests.RequestException as e:
             logger.error(f"Error fetching {url}: {e}")
@@ -170,7 +170,7 @@ class BaseScraper(ABC):
                 response = requests.get(
                     "http://httpbin.org/ip",
                     proxies={"http": proxy, "https": proxy},
-                    timeout=5,
+                    timeout=3,
                 )
             except requests.RequestException:
                 return False
@@ -178,7 +178,7 @@ class BaseScraper(ABC):
                 return response.status_code == 200
 
         logger.info(f"Validating {len(proxies)} proxies...")
-        results = run_in_parallel(validate_proxy, [(proxy,) for proxy in proxies], max_workers=5)  # pyright: ignore[reportArgumentType]
+        results = run_in_parallel(validate_proxy, [(proxy,) for proxy in proxies], max_workers=10)  # pyright: ignore[reportArgumentType]
         for proxy, is_valid in zip(proxies, results):
             if is_valid:
                 valid_proxies.append(proxy)

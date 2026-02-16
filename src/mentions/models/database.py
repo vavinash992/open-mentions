@@ -113,6 +113,7 @@ class WorkspaceMention(SQLModel, table=True):
         Index("ix_workspace_mentions_workspace_id", "workspace_id"),
         Index("ix_workspace_mentions_workspace_keyword", "workspace_id", "keyword"),
         Index("ix_workspace_mentions_created_at", "created_at"),
+        Index("ix_workspace_mentions_workspace_created", "workspace_id", "created_at"),  # Composite index for analytics
     )
 
     workspace_id: str = Field(

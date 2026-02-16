@@ -55,11 +55,12 @@ class SearchOrchestrator:
             logger.info(f"Workspace ID: '{workspace_id}'")
 
         # Initialize all scrapers
+        # Optimized: max_pages=1 for speed, proxies enabled to avoid rate limits
         scrapers = [
-            ("reddit", RedditScraper()),
-            ("hackernews", HackerNewsScraper()),
-            ("devto", DevtoScraper()),
-            ("stackexchange", StackExchangeScraper()),
+            ("reddit", RedditScraper(use_free_proxies=True, max_pages=1)),
+            ("hackernews", HackerNewsScraper(use_free_proxies=True, max_pages=1)),
+            ("devto", DevtoScraper(use_free_proxies=True, max_pages=1)),
+            ("stackexchange", StackExchangeScraper(use_free_proxies=True, max_pages=1)),
         ]
 
         if not workspace_id:
@@ -193,22 +194,17 @@ class SearchOrchestrator:
         if not items:
             return [], []
 
-        urls = list({item.url for item in items})
+        # Deduplicate items by URL upfront (keep first occurrence)
+        items_by_url = {item.url: item for item in items}
+        unique_urls = list(items_by_url.keys())
+
         async with async_session_maker() as session:
-            statement = select(Mention.url).where(Mention.url.in_(urls))
+            statement = select(Mention.url).where(Mention.url.in_(unique_urls))
             result = await session.execute(statement)
             existing_urls = {row[0] for row in result.all()}
 
-        # Deduplicate new items by URL as well (avoid classifying the same URL twice in one batch)
-        seen: set[str] = set()
-        new_items: list[ScrapedItem] = []
-        for item in items:
-            if item.url in existing_urls:
-                continue
-            if item.url in seen:
-                continue
-            seen.add(item.url)
-            new_items.append(item)
+        # Filter out existing URLs in single pass
+        new_items = [item for url, item in items_by_url.items() if url not in existing_urls]
 
         return new_items, sorted(existing_urls)
 
