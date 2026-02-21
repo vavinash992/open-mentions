@@ -19,8 +19,15 @@ from mentions.models.database import (  # noqa: F401
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 DATABASE_URL = f"sqlite+aiosqlite:///{PROJECT_ROOT / 'open_mentions.db'}"
 
-# Create async engine
-engine = create_async_engine(DATABASE_URL, echo=False, future=True)
+# Create async engine with pool limits to avoid indefinite waits under concurrency
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    future=True,
+    pool_size=5,
+    max_overflow=10,
+    pool_timeout=30,
+)
 
 # Create async session maker
 async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

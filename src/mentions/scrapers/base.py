@@ -1,4 +1,6 @@
 import random
+import threading
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
 from typing import Any, ClassVar, Optional
@@ -8,7 +10,6 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 from mentions.errors import InValidFilterException
-from mentions.utils.utils import run_in_parallel
 
 
 class ScrapedItem(BaseModel):
@@ -56,12 +57,128 @@ class ScrapedItem(BaseModel):
     )
 
 
+class ProxyManager:
+    """Thread-safe proxy cache with TTL.
+
+    All BaseScraper instances share a single instance so that proxy fetching
+    and validation only happens once per TTL window.
+    """
+
+    # Cache settings
+    PROXY_TTL_SECONDS = 600  # 10 minutes
+    REQUIRED_PROXY_COUNT = 2
+
+    def __init__(self) -> None:
+        self._proxies: list[str] = []
+        self._fetched_at: float = 0.0
+        self._fetch_lock = threading.Lock()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def get_proxies(self) -> list[str]:
+        """Return cached proxies, refreshing if stale or empty."""
+        if self._is_fresh():
+            return list(self._proxies)
+
+        with self._fetch_lock:
+            # Double-check after acquiring lock (another thread may have refreshed)
+            if self._is_fresh():
+                return list(self._proxies)
+
+            self._refresh()
+            return list(self._proxies)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _is_fresh(self) -> bool:
+        return bool(self._proxies) and (time.monotonic() - self._fetched_at) < self.PROXY_TTL_SECONDS
+
+    def _refresh(self) -> None:
+        raw = self._fetch_proxy_list()
+        if not raw:
+            logger.warning("No free proxies available from provider.")
+            self._proxies = []
+            self._fetched_at = time.monotonic()
+            return
+
+        validated = self._validate_proxies(raw)
+        if len(validated) < self.REQUIRED_PROXY_COUNT:
+            logger.warning(
+                f"Only {len(validated)} valid proxies found (need {self.REQUIRED_PROXY_COUNT}). "
+                "Scrapers will use system IP."
+            )
+            self._proxies = []
+        else:
+            self._proxies = validated
+
+        self._fetched_at = time.monotonic()
+
+    @staticmethod
+    def _fetch_proxy_list() -> list[str]:
+        url = (
+            "https://api.proxyscrape.com/v4/free-proxy-list/get"
+            "?request=display_proxies&proxy_format=protocolipport&format=text"
+        )
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            return [p.strip() for p in response.text.splitlines() if p.strip()]
+        except requests.RequestException as e:
+            logger.error(f"Error fetching free proxies: {e}")
+            return []
+
+    @staticmethod
+    def _validate_proxies(proxies: list[str]) -> list[str]:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _check(proxy: str) -> str | None:
+            try:
+                resp = requests.get(
+                    "http://httpbin.org/ip",
+                    proxies={"http": proxy, "https": proxy},
+                    timeout=3,
+                )
+            except requests.RequestException:
+                return None
+            else:
+                return proxy if resp.status_code == 200 else None
+
+        required = ProxyManager.REQUIRED_PROXY_COUNT
+        logger.info(f"Validating proxies (need {required} valid, {len(proxies)} candidates)...")
+
+        valid: list[str] = []
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {executor.submit(_check, p): p for p in proxies}
+            try:
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        valid.append(result)
+                        if len(valid) >= required:
+                            break
+            finally:
+                # Cancel remaining futures we no longer need
+                for f in futures:
+                    f.cancel()
+
+        logger.info(f"Found {len(valid)} valid proxies.")
+        return valid
+
+
+# Module-level singleton
+_proxy_manager = ProxyManager()
+
+
 class BaseScraper(ABC):
     """
     Abstract base class for all platform scrapers (e.g., Reddit, X, Instagram).
     """
 
-    REQUIRED_PROXY_COUNT = 2  # Reduced from 5 to speed up startup
+    REQUIRED_PROXY_COUNT = 2
     USER_AGENTS: ClassVar[list[str]] = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.1 Safari/605.1.15",
@@ -72,39 +189,31 @@ class BaseScraper(ABC):
 
     def __init__(self, use_free_proxies: bool = True, USER_PROXIES: list[str] | None = None):
         """
-        Initialize the scraper. This method can be overridden by subclasses
-        to set up specific configurations or authentication.
+        Initialize the scraper.
+
+        No network calls are made here. Proxies are resolved lazily on
+        the first ``call_url`` invocation via the shared ``ProxyManager``.
         """
-        # Initialize proxies to empty list by default
+        self._use_free_proxies = use_free_proxies
+        self._user_proxies = USER_PROXIES
+        self._proxies_resolved = False
         self.proxies: list[str] = []
 
-        # If user provided proxies, use them directly
-        if USER_PROXIES:
-            self.proxies = USER_PROXIES
+    def _ensure_proxies(self) -> None:
+        """Resolve proxies lazily (called once, on first network request)."""
+        if self._proxies_resolved:
+            return
+        self._proxies_resolved = True
+
+        if self._user_proxies:
+            self.proxies = self._user_proxies
             return
 
-        # If not using free proxies and no user proxies provided
-        if not use_free_proxies:
-            logger.warning("No proxies are being used. This may lead to rate limiting or IP bans.")
+        if not self._use_free_proxies:
+            logger.warning("No proxies configured. Using system IP.")
             return
 
-        # Try to get and validate free proxies
-        if use_free_proxies:
-            available_proxies = self.get_proxies()
-            if not available_proxies:
-                msg = "No free proxies available. Using system IP instead."
-                logger.warning(msg)
-                return
-
-            proxies = self.validate_proxies(available_proxies)
-            if len(proxies) < self.REQUIRED_PROXY_COUNT:
-                logger.warning(
-                    f"Only {len(proxies)} valid proxies found. "
-                    f"Required: {self.REQUIRED_PROXY_COUNT}. "
-                    "Using system IP instead."
-                )
-            else:
-                self.proxies = proxies
+        self.proxies = _proxy_manager.get_proxies()
 
     def validate_filter(self, filter_by: str) -> None:
         """
@@ -127,11 +236,13 @@ class BaseScraper(ABC):
             url (str): The URL to fetch.
             headers (dict): Headers to include in the request.
             params (dict): Query parameters for the request.
-            proxy (dict | None): Proxy settings for the request, if any.
 
         Returns:
             dict | None: The JSON response from the GET request, or None if error occurred.
         """
+        # Lazy proxy resolution on first call
+        self._ensure_proxies()
+
         try:
             proxy = {"http": random.choice(self.proxies)} if self.proxies else None  # noqa: S311
             response = requests.get(url, headers=headers, params=params, proxies=proxy, timeout=30)
@@ -146,46 +257,16 @@ class BaseScraper(ABC):
     def get_proxies(self) -> list[str]:
         """
         Retrieve a list of proxies to use for scraping.
-        This method can be overridden by subclasses to provide specific proxy configurations.
+        Delegates to the shared ProxyManager for caching.
         """
-        url = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&proxy_format=protocolipport&format=text"
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
-            proxies = response.text.splitlines()
-            return [proxy.strip() for proxy in proxies if proxy.strip()]
-        except requests.RequestException as e:
-            logger.error(f"Error while trying to fetch free proxies: {e}")
-            return []
+        return _proxy_manager.get_proxies()
 
     def validate_proxies(self, proxies: list[str]) -> list[str]:
         """
         Validate the provided proxies by checking if they are reachable.
         Returns a list of valid proxies.
         """
-        valid_proxies: list[str] = []
-
-        def validate_proxy(proxy: str) -> bool:
-            try:
-                response = requests.get(
-                    "http://httpbin.org/ip",
-                    proxies={"http": proxy, "https": proxy},
-                    timeout=3,
-                )
-            except requests.RequestException:
-                return False
-            else:
-                return response.status_code == 200
-
-        logger.info(f"Validating {len(proxies)} proxies...")
-        results = run_in_parallel(validate_proxy, [(proxy,) for proxy in proxies], max_workers=10)  # pyright: ignore[reportArgumentType]
-        for proxy, is_valid in zip(proxies, results):
-            if is_valid:
-                valid_proxies.append(proxy)
-                if len(valid_proxies) >= self.REQUIRED_PROXY_COUNT:
-                    break
-        logger.info(f"Found {len(valid_proxies)} valid proxies.")
-        return valid_proxies
+        return ProxyManager._validate_proxies(proxies)
 
     def paginate_numbered(
         self,

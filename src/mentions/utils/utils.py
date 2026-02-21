@@ -1,4 +1,3 @@
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
@@ -20,7 +19,7 @@ def run_in_parallel(func: Callable[..., Any], args_list: list[tuple[Any, Any]], 
     if not callable(func):
         msg = "The first argument must be a callable function."
         raise TypeError(msg)
-    max_workers = max(1, min(max_workers, os.cpu_count() or 1))
+    max_workers = max(1, max_workers)
     results: list[Any] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_args = {executor.submit(func, *args): args for args in args_list}

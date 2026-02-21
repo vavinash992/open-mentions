@@ -173,23 +173,19 @@ async def _run_monitor_job(job_id: str, workspace_id: str, keywords: list[dict])
 
             mentions_count = len(mentions)
             total_new_mentions += mentions_count
-            keyword_results.append(
-                {
-                    "keyword": tracked_keyword["keyword"],
-                    "new_mentions": mentions_count,
-                    "status": "success",
-                }
-            )
+            keyword_results.append({
+                "keyword": tracked_keyword["keyword"],
+                "new_mentions": mentions_count,
+                "status": "success",
+            })
         except Exception as e:
             logger.error(f"Error processing keyword '{tracked_keyword['keyword']}': {e}")
-            keyword_results.append(
-                {
-                    "keyword": tracked_keyword["keyword"],
-                    "new_mentions": 0,
-                    "status": "error",
-                    "error": str(e),
-                }
-            )
+            keyword_results.append({
+                "keyword": tracked_keyword["keyword"],
+                "new_mentions": 0,
+                "status": "error",
+                "error": str(e),
+            })
 
     completed_at = datetime.now(timezone.utc)
     async with async_session_maker() as session:
@@ -259,17 +255,17 @@ async def trigger_monitoring(
                 detail="Workspace not found. Create one via GET /api/v1/workspace/new.",
             )
 
-    # Check rate limit
-    is_allowed, next_allowed = await check_rate_limit(workspace_id)
-
-    if not is_allowed:
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "message": f"Rate limit exceeded. Please wait {RATE_LIMIT_MINUTES} minutes between triggers.",
-                "next_allowed_trigger": next_allowed.isoformat() if next_allowed else None,
-            },
-        )
+    # Rate limit disabled for development
+    # is_allowed, next_allowed = await check_rate_limit(workspace_id)
+    #
+    # if not is_allowed:
+    #     raise HTTPException(
+    #         status_code=429,
+    #         detail={
+    #             "message": f"Rate limit exceeded. Please wait {RATE_LIMIT_MINUTES} minutes between triggers.",
+    #             "next_allowed_trigger": next_allowed.isoformat() if next_allowed else None,
+    #         },
+    #     )
 
     logger.info(f"Manual monitoring trigger requested for workspace '{workspace_id}'")
 
