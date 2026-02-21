@@ -9,10 +9,17 @@ from sqlalchemy import select
 from mentions.db.session import async_session_maker
 from mentions.models.database import Mention, WorkspaceMention
 from mentions.scrapers.base import ScrapedItem
+from mentions.scrapers.csdn import CsdnScraper
 from mentions.scrapers.devto import DevtoScraper
+from mentions.scrapers.github_discussions import GitHubDiscussionsScraper
 from mentions.scrapers.hacker_news import HackerNewsScraper
+from mentions.scrapers.kong_discourse import KongDiscourseScraper
+from mentions.scrapers.lemmy import LemmyScraper
+from mentions.scrapers.medium import MediumScraper
+from mentions.scrapers.producthunt import ProductHuntScraper
 from mentions.scrapers.reddit import RedditScraper
 from mentions.scrapers.stack_exchange import StackExchangeScraper
+from mentions.scrapers.wanikani_forum_scraper import WaniKaniForumScraper
 from mentions.services.llm_processor import LLMProcessor
 
 
@@ -61,6 +68,13 @@ class SearchOrchestrator:
             ("hackernews", HackerNewsScraper(use_free_proxies=True, max_pages=1)),
             ("devto", DevtoScraper(use_free_proxies=True, max_pages=1)),
             ("stackexchange", StackExchangeScraper(use_free_proxies=True, max_pages=1)),
+            ("csdn", CsdnScraper(use_free_proxies=True, max_pages=1)),
+            ("kong_forum", KongDiscourseScraper(use_free_proxies=True, max_pages=1)),
+            ("lemmy", LemmyScraper(use_free_proxies=True, max_pages=1)),
+            ("wanikani_forum", WaniKaniForumScraper(use_free_proxies=True, max_pages=1)),
+            ("github", GitHubDiscussionsScraper(use_free_proxies=True, max_pages=1)),
+            ("producthunt", ProductHuntScraper(use_free_proxies=True, max_pages=1)),
+            ("medium", MediumScraper(use_free_proxies=True, max_pages=1)),
         ]
 
         if not workspace_id:
@@ -121,9 +135,7 @@ class SearchOrchestrator:
             return []
 
         new_items, existing_urls = await self._split_by_global_dedup(items)
-        logger.info(
-            f"[{platform_name}] Global dedup: {len(existing_urls)} existing, {len(new_items)} new"
-        )
+        logger.info(f"[{platform_name}] Global dedup: {len(existing_urls)} existing, {len(new_items)} new")
 
         if new_items:
             logger.info(f"[{platform_name}] Classifying {len(new_items)} new item(s) with LLM...")
@@ -138,9 +150,7 @@ class SearchOrchestrator:
             include_existing=include_existing,
         )
 
-        logger.info(
-            f"[{platform_name}] Linked {len(linked_items)} relevant mention(s) for '{keyword}'"
-        )
+        logger.info(f"[{platform_name}] Linked {len(linked_items)} relevant mention(s) for '{keyword}'")
         return linked_items
 
     async def _scrape_platform(

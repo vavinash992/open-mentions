@@ -10,6 +10,7 @@ import { Card, Metric, Text } from "@tremor/react";
 import { KeywordManager } from "@/components/KeywordManager";
 import { MentionsTable } from "@/components/MentionsTable";
 import { SentimentChart } from "@/components/SentimentChart";
+import { SentimentTrendsChart } from "@/components/SentimentTrendsChart";
 import { Sidebar } from "@/components/Sidebar";
 import { StatCards } from "@/components/StatCards";
 import { TrendsChart } from "@/components/TrendsChart";
@@ -78,6 +79,21 @@ type HistoryResponse = {
   }[];
 };
 
+type AISummaryResponse = {
+  summary: string;
+};
+
+type SentimentTrendPoint = {
+  date: string;
+  positive: number;
+  negative: number;
+  neutral: number;
+};
+
+type SentimentTrendsResponse = {
+  points: SentimentTrendPoint[];
+};
+
 export default function Home() {
   const { workspaceId, loading } = useWorkspace();
   const [days, setDays] = useState(7);
@@ -103,6 +119,12 @@ export default function Home() {
     : null;
   const historyKey = workspaceId
     ? `/api/v1/history?workspace_id=${workspaceId}&page=1&page_size=10`
+    : null;
+  const aiSummaryKey = workspaceId
+    ? `/api/v1/analytics/ai-summary?workspace_id=${workspaceId}`
+    : null;
+  const sentimentTrendsKey = workspaceId
+    ? `/api/v1/analytics/sentiment-trends?workspace_id=${workspaceId}&days=${days}`
     : null;
 
   const { data: summary, mutate: mutateSummary } = useSWR<SummaryResponse>(
@@ -142,6 +164,20 @@ export default function Home() {
   );
   const { data: history, mutate: mutateHistory } = useSWR<HistoryResponse>(
     historyKey,
+    fetcher,
+    {
+      refreshInterval: 30000,
+    }
+  );
+  const { data: aiSummary, isLoading: aiLoading, mutate: mutateAISummary } = useSWR<AISummaryResponse>(
+    aiSummaryKey,
+    fetcher,
+    {
+      refreshInterval: 60000,
+    }
+  );
+  const { data: sentimentTrends } = useSWR<SentimentTrendsResponse>(
+    sentimentTrendsKey,
     fetcher,
     {
       refreshInterval: 30000,
@@ -316,6 +352,7 @@ export default function Home() {
         mutateComparison(),
         mutateReach(),
         mutateHistory(),
+        mutateAISummary(),
       ]);
       if (rateLimited) {
         setCompareError(rateLimitMessage ?? "Rate limit hit. Try again later.");
@@ -341,18 +378,29 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2">
             <button
+              onClick={() => {
+                if (!workspaceId) return;
+                window.open(
+                  `http://localhost:8000/api/v1/export/csv?workspace_id=${workspaceId}`,
+                  "_blank"
+                );
+              }}
+              disabled={!workspaceId}
+              className="rounded-md bg-slate-800 px-3 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              ⬇ Export CSV
+            </button>
+            <button
               onClick={() => setDays(7)}
-              className={`rounded-md px-3 py-1 text-xs ${
-                days === 7 ? "bg-emerald-500 text-white" : "bg-slate-900 text-slate-300"
-              }`}
+              className={`rounded-md px-3 py-1 text-xs ${days === 7 ? "bg-emerald-500 text-white" : "bg-slate-900 text-slate-300"
+                }`}
             >
               7d
             </button>
             <button
               onClick={() => setDays(30)}
-              className={`rounded-md px-3 py-1 text-xs ${
-                days === 30 ? "bg-emerald-500 text-white" : "bg-slate-900 text-slate-300"
-              }`}
+              className={`rounded-md px-3 py-1 text-xs ${days === 30 ? "bg-emerald-500 text-white" : "bg-slate-900 text-slate-300"
+                }`}
             >
               30d
             </button>
@@ -410,6 +458,36 @@ export default function Home() {
             />
           </div>
         </div>
+
+        <SentimentTrendsChart points={sentimentTrends?.points ?? []} />
+
+        <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
+          <div className="flex items-center justify-between">
+            <div>
+              <Text className="text-slate-300">✨ AI Insights</Text>
+              <Text className="text-xs text-slate-500">
+                AI-generated summary of your mention data
+              </Text>
+            </div>
+            <button
+              onClick={() => mutateAISummary()}
+              disabled={aiLoading}
+              className="rounded-md bg-slate-800 px-3 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+            >
+              {aiLoading ? "Generating..." : "↻ Regenerate"}
+            </button>
+          </div>
+          <div className="mt-4 rounded-lg bg-slate-900/60 p-4 text-sm leading-relaxed text-slate-200">
+            {aiLoading ? (
+              <div className="flex items-center gap-2 text-slate-400">
+                <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+                Generating AI insights...
+              </div>
+            ) : (
+              aiSummary?.summary ?? "No summary available yet. Compare brands to generate insights."
+            )}
+          </div>
+        </Card>
 
         <Card className="bg-slate-950 text-slate-100 ring-1 ring-slate-800">
           <div className="flex items-center justify-between">
@@ -481,7 +559,7 @@ export default function Home() {
                     <td className="px-2 py-2">
                       <a
                         href={item.url}
-            target="_blank"
+                        target="_blank"
                         rel="noreferrer"
                         className="text-emerald-400 hover:underline"
                       >

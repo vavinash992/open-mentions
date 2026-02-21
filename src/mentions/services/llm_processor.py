@@ -1,4 +1,4 @@
-"""LLM Processor Service for classifying and summarizing scraped items using Azure OpenAI and instructor."""
+"""LLM Processor Service for classifying and summarizing scraped items using Groq and instructor."""
 
 import asyncio
 import os
@@ -6,7 +6,7 @@ from typing import Optional
 
 import instructor
 from loguru import logger
-from openai import AsyncAzureOpenAI
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from mentions.scrapers.base import ScrapedItem
@@ -38,51 +38,41 @@ class ClassificationResult(BaseModel):
 
 
 class LLMProcessor:
-    """Async service for classifying and summarizing ScrapedItem using Azure OpenAI API with instructor for structured outputs."""
+    """Async service for classifying and summarizing ScrapedItem using Groq API with instructor for structured outputs."""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        endpoint: Optional[str] = None,
-        deployment_name: Optional[str] = None,
-        api_version: Optional[str] = None,
+        model_name: Optional[str] = None,
     ):
         """
-        Initialize the LLM Processor with Azure OpenAI.
+        Initialize the LLM Processor with Groq.
 
         Args:
-            api_key: Azure OpenAI API key. If None, will try to get from AZURE_OPENAI_API_KEY env var.
-            endpoint: Azure OpenAI endpoint. If None, will try to get from AZURE_OPENAI_ENDPOINT env var.
-            deployment_name: Azure OpenAI deployment name. If None, will try to get from AZURE_OPENAI_DEPLOYMENT_NAME env var.
-            api_version: Azure OpenAI API version. If None, will try to get from AZURE_OPENAI_API_VERSION env var.
+            api_key: Groq API key. If None, will try to get from GROQ_API_KEY env var.
+            model_name: Groq model name. If None, will try to get from GROQ_MODEL env var,
+                        defaulting to 'llama-3.3-70b-versatile'.
         """
-        api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
-        endpoint = endpoint or os.getenv("AZURE_OPENAI_ENDPOINT")
-        deployment_name = deployment_name or os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o-mini")
-        api_version = api_version or os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01")
+        api_key = api_key or os.getenv("GROQ_API_KEY")
+        model_name = model_name or os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
         if not api_key:
-            msg = "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable."
-            raise ValueError(msg)
-        if not endpoint:
-            msg = "Azure OpenAI endpoint is required. Set AZURE_OPENAI_ENDPOINT environment variable."
+            msg = "Groq API key is required. Set GROQ_API_KEY environment variable."
             raise ValueError(msg)
 
-        # Initialize Azure OpenAI client
-        azure_client = AsyncAzureOpenAI(
+        # Initialize Groq client (OpenAI-compatible with custom base_url)
+        groq_client = AsyncOpenAI(
             api_key=api_key,
-            api_version=api_version,
-            azure_endpoint=endpoint.rstrip("/"),  # Remove trailing slash if present
+            base_url="https://api.groq.com/openai/v1",
         )
 
         # Wrap client with instructor for structured outputs
-        self.instructor_client = instructor.from_openai(azure_client)
+        self.instructor_client = instructor.from_openai(groq_client)
 
-        self.deployment_name = deployment_name
-        self.api_version = api_version
+        self.model_name = model_name
         self._llm_semaphore = asyncio.Semaphore(10)
 
-        logger.info(f"LLMProcessor initialized with deployment: {deployment_name} at {endpoint}")
+        logger.info(f"LLMProcessor initialized with Groq model: {model_name}")
 
     async def classify_and_summarize(self, item: ScrapedItem, company_name: str) -> ClassificationResult:
         """
@@ -111,7 +101,7 @@ class LLMProcessor:
             logger.debug(f"Classifying mention from {item.platform} for {company_name}")
             # Use instructor to get structured output from Azure OpenAI
             result = await self.instructor_client.chat.completions.create(
-                model=self.deployment_name,
+                model=self.model_name,
                 response_model=ClassificationResult,
                 messages=[
                     {
