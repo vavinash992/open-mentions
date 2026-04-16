@@ -1,0 +1,72 @@
+name: Periodic Keyword Monitoring
+
+on:
+  schedule:
+    # Run every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required to commit and push database file
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Set up Azure OpenAI environment variables
+        env:
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+        run: |
+          echo "AZURE_OPENAI_API_KEY=$AZURE_OPENAI_API_KEY" >> $GITHUB_ENV
+          echo "AZURE_OPENAI_ENDPOINT=$AZURE_OPENAI_ENDPOINT" >> $GITHUB_ENV
+          echo "AZURE_OPENAI_DEPLOYMENT_NAME=$AZURE_OPENAI_DEPLOYMENT_NAME" >> $GITHUB_ENV
+          echo "AZURE_OPENAI_API_VERSION=$AZURE_OPENAI_API_VERSION" >> $GITHUB_ENV
+
+      - name: Run periodic monitoring
+        run: |
+          uv run python -m mentions.scripts.periodic_monitor
+
+      - name: Check for database changes
+        id: db_changes
+        run: |
+          if [ -f "open_mentions.db" ]; then
+            git diff --exit-code open_mentions.db || echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "Database file not found, will be created on first run"
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push database updates
+        if: steps.db_changes.outputs.changed == 'true'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add open_mentions.db
+          git commit -m "chore: Update database from periodic monitoring [skip ci]" || exit 0
+          git push
+        continue-on-error: true
+
+      - name: Upload monitoring log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitoring-log
+          path: monitor.log
+          retention-days: 7
